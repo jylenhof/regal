@@ -35,8 +35,9 @@ Public open source projects integrating Regal for linting in their CI/CD pipelin
 Projects and products that integrate Regal into their offerings.
 
 <!-- cspell:disable -->
+- [Code Rabbit](https://docs.coderabbit.ai/tools/regal)
 - [Dependency Management Data](https://gitlab.com/tanna.dev/dependency-management-data)
-- [Enterprise OPA](https://github.com/styrainc/enterprise-opa)
+- [EOPA](https://github.com/open-policy-agent/eopa)
 - [The Rego Playground](https://play.openpolicyagent.org)
 - [Trunk Check](https://trunk.io/)
 - [reviewdog/action-regal](https://github.com/reviewdog/action-regal)
@@ -51,6 +52,8 @@ The following package managers include Regal in their repositories, either nativ
 - [mise](https://mise.jdx.dev/) via its [aqua](https://aquaproj.github.io/) backend and [aqua's regal definition](https://github.com/aquaproj/aqua-registry/tree/main/pkgs/open-policy-agent/regal)
 - [pkgsrc](https://www.pkgsrc.se/) and the [regal](https://pkgsrc.se/devel/regal) package
 - [Nix](https://nixos.org/): [regal](https://search.nixos.org/packages?channel=24.05&show=regal&from=0&size=50&sort=relevance&type=packages&query=regal)
+- [Arch Linux](https://archlinux.org/): [opa-regal](https://aur.archlinux.org/packages/opa-regal) (AUR)
+- [Alpine Linux](https://alpinelinux.org/): [regal](https://pkgs.alpinelinux.org/package/edge/testing/x86_64/regal)
 - [mason.vim](https://github.com/williamboman/mason.nvim): [regal](https://github.com/mason-org/mason-registry/blob/main/packages/regal/package.yaml)
 
 ## Companies and Organizations
@@ -72,7 +75,6 @@ Some companies and organizations using Regal.
 - [Red Hat](https://www.redhat.com)
 - [Spacelift](https://www.spacelift.io)
 - [Stacklok](https://stacklok.com)
-- [Styra](https://www.styra.com)
 - [UNIwise](https://uniwise.eu/)
 - [VodafoneZiggo](https://www.vodafoneziggo.nl)
 <!-- cspell:enable-->

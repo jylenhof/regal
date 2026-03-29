@@ -23,7 +23,7 @@ report contains violation if {
 		value.type == "var"
 		not value.value in allowed_refs
 		not startswith(value.value, "$")
-		not _function_call_ctx(input.rules[i], array.concat([node], path))
+		not _function_call_ctx(input.rules[i], array.flatten([node, path]))
 	]
 
 	count(external) > object.get(config.rules, ["style", "external-reference", "max-allowed"], 2)
@@ -49,16 +49,16 @@ _named_vars(arg) := {var.value | some var in ast.find_term_vars(arg)} if arg.typ
 #   note: this doesn't check for built-in calls or calls to function
 #   defined in the same package, as those are already covered by
 #   "fn_namespaces" in the report rule
-_function_call_ctx(fn, path) if {
-	object.get(fn, array.slice(path, 0, count(path) - 4), false).type == "call"
+_function_call_ctx(fun, path) if {
+	object.get(fun, array.slice(path, 0, count(path) - 4), false).type == "call"
 } else if {
 	terms_path := array.slice(path, 0, util.last_indexof(path, "terms") + 2)
-	next_term_path := array.concat(
+	next_term_path := array.flatten([
 		array.slice(terms_path, 0, count(terms_path) - 1), # ["body", 0, "terms", 0] -> ["body", 0, "terms"]
-		[regal.last(terms_path) + 1], # 0 -> 1
-	)
+		regal.last(terms_path) + 1, # 0 -> 1
+	])
 
 	# ["body", 0, "terms", 1]
 
-	object.get(fn, next_term_path, null) != null
+	object.get(fun, next_term_path, null) != null
 }

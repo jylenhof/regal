@@ -189,14 +189,11 @@ func lint(args []string, params *lintParams) (result report.Report, err error) {
 		WithDebugMode(params.debug).
 		WithProfiling(params.profile).
 		WithInstrumentation(params.instrument).
+		WithCustomRulesPaths(params.rules.v...).
 		WithInputPaths(args)
 
 	if params.enablePrint {
 		regal = regal.WithPrintHook(topdown.NewPrintHook(os.Stderr))
-	}
-
-	if params.rules.isSet {
-		regal = regal.WithCustomRules(params.rules.v)
 	}
 
 	if params.ignoreFiles.isSet {
@@ -225,7 +222,7 @@ func lint(args []string, params *lintParams) (result report.Report, err error) {
 			}
 
 			if rulesDir := filepath.Join(regalPath, "rules"); !params.rules.isSet && rio.IsDir(rulesDir) {
-				regal = regal.WithCustomRules([]string{rulesDir})
+				regal = regal.WithCustomRulesPaths(rulesDir)
 			}
 		}
 	}

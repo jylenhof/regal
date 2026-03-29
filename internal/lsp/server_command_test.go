@@ -11,7 +11,7 @@ import (
 	"github.com/open-policy-agent/regal/internal/lsp/clients"
 	"github.com/open-policy-agent/regal/internal/lsp/types"
 	"github.com/open-policy-agent/regal/internal/lsp/uri"
-	"github.com/open-policy-agent/regal/internal/testutil"
+	"github.com/open-policy-agent/regal/internal/test/must"
 	"github.com/open-policy-agent/regal/pkg/roast/encoding"
 )
 
@@ -76,12 +76,7 @@ allow if {
 
 				return func(_ context.Context, _ *jsonrpc2.Conn, req *jsonrpc2.Request) (result any, err error) {
 					if req.Method == "workspace/applyEdit" {
-						requestData, err := encoding.JSONUnmarshalTo[types.ApplyWorkspaceEditParams](*req.Params)
-						if err != nil {
-							t.Fatalf("failed to unmarshal applyEdit params: %s", err)
-						}
-
-						receivedMessages <- requestData
+						receivedMessages <- must.Return(encoding.JSONUnmarshalTo[types.ApplyWorkspaceEditParams](*req.Params))(t)
 
 						return map[string]any{"applied": true}, nil
 					}
@@ -107,7 +102,7 @@ allow if {
 
 			// Create command arguments with proper JSON marshaling for Windows backslash escapes
 			commandArgs := types.CommandArgs{Target: mainRegoURI}
-			argsJSON := testutil.Must(encoding.JSON().Marshal(commandArgs))(t)
+			argsJSON := must.Return(encoding.JSON().Marshal(commandArgs))(t)
 
 			executeParams := types.ExecuteCommandParams{
 				Command:   "regal.fix.opa-fmt",
@@ -117,40 +112,128 @@ allow if {
 			var executeResponse any
 
 			// simulates a manual fmt request from the client
-			testutil.NoErr(connClient.Call(ctx, "workspace/executeCommand", executeParams, &executeResponse))(t)
+			must.Equal(t, nil, connClient.Call(ctx, "workspace/executeCommand", executeParams, &executeResponse))
 
 			timeout := time.NewTimer(determineTimeout())
 			defer timeout.Stop()
 
 			select {
 			case applyEditParams := <-receivedMessages:
-				if applyEditParams.Label != "Format using opa fmt" {
-					t.Fatalf("expected label 'Format using opa fmt', got %s", applyEditParams.Label)
-				}
-
-				if len(applyEditParams.Edit.DocumentChanges) != 1 {
-					t.Fatalf("expected 1 document change, got %d", len(applyEditParams.Edit.DocumentChanges))
-				}
+				must.Equal(t, "Format using opa fmt", applyEditParams.Label, "edit label")
+				must.Equal(t, 1, len(applyEditParams.Edit.DocumentChanges), "number of document changes")
 
 				docChange := applyEditParams.Edit.DocumentChanges[0]
-				if docChange.TextDocument.URI != mainRegoURI {
-					t.Fatalf("expected URI %s, got %s", mainRegoURI, docChange.TextDocument.URI)
-				}
-
-				if len(docChange.Edits) != len(tc.expectedEdits) {
-					t.Fatalf("expected %d edits, got %d", len(tc.expectedEdits), len(docChange.Edits))
-				}
+				must.Equal(t, mainRegoURI, docChange.TextDocument.URI, "document URI")
+				must.Equal(t, len(tc.expectedEdits), len(docChange.Edits), "number of edits")
 
 				for i, expected := range tc.expectedEdits {
-					actual := docChange.Edits[i]
-					if actual.Range != expected.Range || actual.NewText != expected.NewText {
-						t.Fatalf("edit %d mismatch:\nexpected: %v\nactual:   %v", i, expected, actual)
-					}
+					must.Equal(t, expected.Range, docChange.Edits[i].Range, "edit range")
+					must.Equal(t, expected.NewText, docChange.Edits[i].NewText, "edit new text")
 				}
 
 			case <-timeout.C:
 				t.Fatal("timeout waiting for workspace/applyEdit request")
 			}
 		})
+	}
+}
+
+func TestExecuteCommandExplorer(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+
+	defer func() {
+		time.Sleep(200 * time.Millisecond)
+		cancel()
+	}()
+
+	receivedNotifications := make(chan map[string]any, defaultBufferedChannelSize)
+
+	createExplorerNotificationTestHandler := func(
+		t *testing.T,
+		receivedNotifications chan map[string]any,
+	) func(_ context.Context, _ *jsonrpc2.Conn, _ *jsonrpc2.Request) (result any, err error) {
+		t.Helper()
+
+		return func(_ context.Context, _ *jsonrpc2.Conn, req *jsonrpc2.Request) (result any, err error) {
+			if req.Method == "regal/showExplorerResult" {
+				if req.Params == nil {
+					t.Fatal("expected notification params to be non-nil")
+				}
+
+				var notificationData map[string]any
+				if err := encoding.JSON().Unmarshal(*req.Params, &notificationData); err != nil {
+					t.Fatalf("failed to unmarshal notification params: %s", err)
+				}
+
+				receivedNotifications <- notificationData
+
+				return nil, nil
+			}
+
+			if req.Method == "workspace/applyEdit" {
+				return map[string]any{"applied": true}, nil
+			}
+
+			return struct{}{}, nil
+		}
+	}
+
+	tempDir := t.TempDir()
+	clientHandler := createExplorerNotificationTestHandler(t, receivedNotifications)
+	ls, connClient := createAndInitServer(t, ctx, tempDir, clientHandler)
+
+	// Set client identifier to VSCode so it uses the notification approach
+	ls.client.Identifier = clients.IdentifierVSCode
+
+	go ls.StartCommandWorker(ctx)
+
+	content := `package test
+
+allow if {
+	1 == 1
+}
+`
+
+	mainRegoURI := uri.FromPath(clients.IdentifierGoTest, filepath.Join(tempDir, "test.rego"))
+	ls.cache.SetFileContents(mainRegoURI, content)
+
+	executeParams := types.ExecuteCommandParams{
+		Command: "regal.explorer",
+		Arguments: []any{
+			map[string]any{
+				"target":      mainRegoURI,
+				"strict":      false,
+				"annotations": false,
+				"print":       false,
+				"format":      true,
+			},
+		},
+	}
+
+	var executeResponse any
+	must.Equal(t, nil, connClient.Call(ctx, "workspace/executeCommand", executeParams, &executeResponse))
+
+	timeout := time.NewTimer(determineTimeout())
+	defer timeout.Stop()
+
+	select {
+	case notification := <-receivedNotifications:
+		if _, ok := notification["stages"]; !ok {
+			t.Fatal("expected notification to contain 'stages' field")
+		}
+
+		stages := must.Be[[]any](t, notification["stages"])
+		must.NotEqual(t, 0, len(stages), "expected at least one compilation stage")
+
+		firstStage := must.Be[map[string]any](t, stages[0])
+		for _, field := range []string{"name", "output", "error"} {
+			if _, ok := firstStage[field]; !ok {
+				t.Fatalf("expected stage to have '%s' field", field)
+			}
+		}
+	case <-timeout.C:
+		t.Fatal("timeout waiting for regal/showExplorerResult notification")
 	}
 }

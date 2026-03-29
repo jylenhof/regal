@@ -12,9 +12,9 @@ import data.regal.util
 # METADATA
 # description: reports any location where a rule name repeats the package name
 report contains violation if {
-	some rule in input.rules
+	some i, rule in input.rules
 
-	strings.any_prefix_match(ast.ref_static_to_string(rule.head.ref), _possible_offending_prefixes)
+	strings.any_prefix_match(ast.rule_names_ordered[i], _possible_offending_prefixes)
 
 	violation := result.fail(rego.metadata.chain(), result.location(rule.head.ref[0]))
 }
@@ -36,9 +36,9 @@ _possible_offending_prefixes contains concat("", formatted_combination) if {
 
 	count(combination) > 1
 
-	formatted_combination := array.concat([combination[0]], [w |
+	formatted_combination := array.flatten([combination[0], [formatted |
 		some word in util.rest(combination)
 
-		w := regex.replace(word, `^[a-z]`, upper(substring(word, 0, 1)))
-	])
+		formatted := regex.replace(word, `^[a-z]`, upper(substring(word, 0, 1)))
+	]])
 }

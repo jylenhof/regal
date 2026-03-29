@@ -23,22 +23,22 @@ result["response"] := actions
 actions contains action if {
 	"quickfix" in only
 
-	some diag in input.params.context.diagnostics
+	some diagnostic in input.params.context.diagnostics
 
-	[title, args] := rules[diag.code]
+	[title, args] := rules[diagnostic.code]
 	action := {
 		"title": title,
 		"kind": "quickfix",
-		"diagnostics": [diag],
+		"diagnostics": [diagnostic],
 		"isPreferred": true,
 		"command": {
 			"title": title,
-			"command": $"regal.fix.{diag.code}",
+			"command": $"regal.fix.{diagnostic.code}",
 			"tooltip": title,
 			"arguments": [json.marshal(object.filter(
 				{
 					"target": input.params.textDocument.uri,
-					"diagnostic": diag,
+					"diagnostic": diagnostic,
 				},
 				args,
 			))],
@@ -47,22 +47,22 @@ actions contains action if {
 }
 
 # METADATA
-# description: Generic code action to ignore any rule in config from diag
+# description: Generic code action to ignore any rule in config from diagnostics
 actions contains action if {
 	"quickfix" in only
 
-	some diag in input.params.context.diagnostics
+	some diagnostic in input.params.context.diagnostics
 
 	action := {
 		"title": "Ignore this rule in config",
 		"kind": "quickfix",
-		"diagnostics": [diag],
+		"diagnostics": [diagnostic],
 		"isPreferred": false,
 		"command": {
 			"title": "Ignore this rule in config",
 			"command": "regal.config.disable-rule",
 			"tooltip": "Ignore this rule in config",
-			"arguments": [json.marshal({"diagnostic": diag})],
+			"arguments": [json.marshal({"diagnostic": diagnostic})],
 		},
 	}
 }
@@ -76,43 +76,38 @@ actions contains action if {
 	input.regal.client.identifier == clients.vscode
 	"quickfix" in only
 
-	some diag in input.params.context.diagnostics
+	some diagnostic in input.params.context.diagnostics
 
 	# always show the docs link
-	title := $"Show documentation for {diag.code}"
+	title := $"Show documentation for {diagnostic.code}"
 	action := {
 		"title": title,
 		"kind": "quickfix",
-		"diagnostics": [diag],
+		"diagnostics": [diagnostic],
 		"command": {
 			"title": title,
 			"command": "vscode.open",
 			"tooltip": title,
-			"arguments": [diag.codeDescription.href],
+			"arguments": [diagnostic.codeDescription.href],
 		},
 	}
 }
 
 # METADATA
 # description: |
-#   Code action to explore the compiler stages for a policy. This is *source action*,
-#   unrelated to diagnostics. Depends on the "vscode.open" command being available, and
-#   therefore currently only works in VSCode clients.
+#   Code action to explore compiler stages for all LSP clients.
+#   Invokes the regal.explorer command which handles client-specific behavior.
 actions contains action if {
-	input.regal.client.identifier == clients.vscode
-
 	strings.any_prefix_match("source.explore", only)
 
-	document := trim_prefix(input.params.textDocument.uri, input.regal.environment.workspace_root_uri)
-	explorer_url := $"{input.regal.environment.web_server_base_uri}/explorer{document}"
 	action := {
 		"title": "Explore compiler stages for this policy",
 		"kind": "source.explore",
 		"command": {
 			"title": "Explore compiler stages for this policy",
-			"command": "vscode.open",
+			"command": "regal.explorer",
 			"tooltip": "Explore compiler stages for this policy",
-			"arguments": [explorer_url],
+			"arguments": [{"target": input.params.textDocument.uri, "format": true}],
 		},
 	}
 }
@@ -140,9 +135,6 @@ rules := {
 #   be hierarchical — if only contains "source" it matches all source actions,
 #   while "source.foo" matches only source actions with a "foo" prefix.
 # scope: document
-default only := [
-	"quickfix",
-	"source.explore",
-]
+default only := ["quickfix", "source.explore"]
 
-only := input.params.context.only if count(input.params.context.only) > 0
+only := input.params.context.only if input.params.context.only != []

@@ -5,6 +5,7 @@ import (
 
 	"github.com/open-policy-agent/opa/v1/ast"
 
+	"github.com/open-policy-agent/regal/internal/test/assert"
 	"github.com/open-policy-agent/regal/pkg/roast/rast"
 )
 
@@ -17,22 +18,11 @@ func TestStructToValue(t *testing.T) {
 		Field3 bool   `json:"field3"`
 	}
 
-	input := testStruct{
-		Field1: "value1",
-		Field2: 0, // This should be omitted due to omitempty
-		Field3: true,
-	}
+	// Field2 should be omitted due to omitempty
+	got := rast.StructToValue(testStruct{Field1: "value1", Field2: 0, Field3: true})
+	exp := ast.NewObject(rast.Item("field1", ast.InternedTerm("value1")), rast.Item("field3", ast.InternedTerm(true)))
 
-	expected := ast.NewObject(
-		ast.Item(ast.InternedTerm("field1"), ast.StringTerm("value1")),
-		ast.Item(ast.InternedTerm("field3"), ast.BooleanTerm(true)),
-	)
-
-	result := rast.StructToValue(input)
-
-	if result.Compare(expected) != 0 {
-		t.Errorf("Expected %v, got %v", expected, result)
-	}
+	assert.Equal(t, 0, got.Compare(exp))
 }
 
 func TestStructToValueNested(t *testing.T) {
@@ -47,24 +37,39 @@ func TestStructToValueNested(t *testing.T) {
 		Field2 nestedStruct `json:"field2"`
 	}
 
-	i := 42
-	input := testStruct{
-		Field1: "value1",
-		Field2: nestedStruct{NestedField: &i},
-	}
-
-	expected := ast.NewObject(
-		ast.Item(ast.InternedTerm("field1"), ast.StringTerm("value1")),
-		ast.Item(ast.InternedTerm("field2"), ast.ObjectTerm(
-			ast.Item(ast.InternedTerm("nested_field"), ast.InternedTerm(42)),
-		)),
+	got := rast.StructToValue(testStruct{Field1: "value1", Field2: nestedStruct{NestedField: new(42)}})
+	exp := ast.NewObject(
+		rast.Item("field1", ast.InternedTerm("value1")),
+		rast.Item("field2", ast.ObjectTerm(rast.Item("nested_field", ast.InternedTerm(42)))),
 	)
 
-	result := rast.StructToValue(input)
+	assert.Equal(t, 0, got.Compare(exp))
+}
 
-	if result.Compare(expected) != 0 {
-		t.Errorf("Expected %v, got %v", expected, result)
+func TestStructToValueWithASTValueField(t *testing.T) {
+	t.Parallel()
+
+	type testStruct struct {
+		Field ast.Value `json:"field"`
 	}
+
+	got := rast.StructToValue(testStruct{Field: ast.NewObject(rast.Item("key", ast.InternedTerm("value")))})
+	exp := ast.NewObject(rast.Item("field", ast.ObjectTerm(rast.Item("key", ast.InternedTerm("value")))))
+
+	assert.Equal(t, 0, got.Compare(exp))
+}
+
+func TestStructToValueTagWithTrailingComma(t *testing.T) {
+	t.Parallel()
+
+	type testStruct struct {
+		Field string `json:"field,"` //nolint:staticcheck
+	}
+
+	got := rast.StructToValue(testStruct{Field: "value"})
+	exp := ast.NewObject(rast.Item("field", ast.InternedTerm("value")))
+
+	assert.Equal(t, 0, got.Compare(exp))
 }
 
 // ast.ParseBody-12               114549    9125 ns/op    9604 B/op      96 allocs/op
@@ -135,8 +140,7 @@ func TestRefStringToBody(t *testing.T) {
 	tests := []string{"data", "data.foo", "data.foo.bar", "input", "input.foo", "var.string1", "var.string1.string2"}
 
 	for _, test := range tests {
-		body := rast.RefStringToBody(test)
-		if !body.Equal(ast.MustParseBody(test)) {
+		if body := rast.RefStringToBody(test); !body.Equal(ast.MustParseBody(test)) {
 			t.Fatalf("expected body to equal %s, got %s", test, body)
 		}
 	}

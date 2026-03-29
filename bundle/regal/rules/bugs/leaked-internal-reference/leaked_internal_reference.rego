@@ -7,34 +7,37 @@ import data.regal.config
 import data.regal.result
 
 report contains violation if {
-	_enabled(_valid_test_file_name(input.regal.file.name), _enable_for_test_files)
+	_enabled_for_file
 
 	value := ast.found.refs[_][_].value
 
-	contains(ast.ref_to_string(value), "._")
+	some term in value
+
+	term.type == "string"
+	startswith(term.value, "_")
 
 	violation := result.fail(rego.metadata.chain(), result.ranged_from_ref(value))
 }
 
 report contains violation if {
-	_enabled(_valid_test_file_name(input.regal.file.name), _enable_for_test_files)
+	_enabled_for_file
 
 	value := input.imports[_].path.value
 
-	contains(ast.ref_to_string(value), "._")
+	some term in value
+
+	term.type == "string"
+	startswith(term.value, "_")
 
 	violation := result.fail(rego.metadata.chain(), result.ranged_from_ref(value))
 }
 
-default _enabled(_, _) := true
+_enabled_for_file if not _test_file
 
-_enabled(true, false) := false
+_enabled_for_file if {
+	_test_file
+	config.rules.bugs["leaked-internal-reference"]["include-test-files"]
+}
 
-default _valid_test_file_name(_) := false
-
-_valid_test_file_name(filename) if endswith(filename, "_test.rego")
-_valid_test_file_name("test.rego")
-
-default _enable_for_test_files := false
-
-_enable_for_test_files := config.rules.bugs["leaked-internal-reference"]["include-test-files"]
+_test_file if input.regal.file.name == "test.rego"
+_test_file if endswith(input.regal.file.name, "_test.rego")

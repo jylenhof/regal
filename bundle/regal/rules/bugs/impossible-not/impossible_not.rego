@@ -7,7 +7,7 @@ import data.regal.result
 import data.regal.util
 
 # note: not ast.package_path as we want the "data" component here
-_package_path := [part.value | some part in input.package.path]
+_package_path := [term.value | some term in input.package.path]
 
 _multivalue_rules contains path if {
 	some rule in ast.rules
@@ -93,11 +93,10 @@ aggregate_report contains violation if {
 	some file
 	negated := _aggregates[file].negated_refs[_] # regal ignore:prefer-some-in-iteration
 
-	some multivalue_ref in all_multivalue_refs
+	some [negated.resolved_path, ref_file] in all_multivalue_refs
 
 	# violations in same file handled by non-aggregate "report"
-	multivalue_ref[1] != file
-	negated.resolved_path == multivalue_ref[0]
+	ref_file != file
 
 	loc := object.union(result.location(negated.ref), {"location": {
 		"file": file,
@@ -113,7 +112,7 @@ aggregate_report contains violation if {
 _var_to_ref(terms) := [terms] if terms.type == "var"
 _var_to_ref(terms) := terms.value if terms.type == "ref"
 
-_to_string(ref) := concat(".", [part.value | some part in ref])
+_to_string(ref) := concat(".", [term.value | some term in ref])
 
 _resolve(ref, _, _) := _to_string(ref) if ref[0].value == "data"
 
@@ -123,7 +122,7 @@ _resolve(ref, _, imported_symbols) := concat(".", resolved) if {
 
 	resolved := array.concat(
 		imported_symbols[ref[0].value],
-		[part.value | some part in array.slice(ref, 1, 100)],
+		[term.value | some term in array.slice(ref, 1, 100)],
 	)
 }
 
@@ -133,10 +132,7 @@ _resolve(ref, pkg_path, imported_symbols) := concat(".", resolved) if {
 
 	not imported_symbols[ref[0].value]
 
-	resolved := array.concat(
-		pkg_path,
-		[part.value | some part in ref],
-	)
+	resolved := array.concat(pkg_path, [term.value | some term in ref])
 }
 
 # METADATA

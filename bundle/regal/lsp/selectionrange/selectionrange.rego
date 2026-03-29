@@ -21,7 +21,7 @@ default result["response"] := null
 result["response"] := ranges if {
 	ranges := array.flatten([package_ranges, import_ranges, rule_ranges])
 
-	count(ranges) > 0
+	ranges != []
 }
 
 # METADATA
@@ -43,7 +43,7 @@ package_ranges := [item |
 	pkg := data.workspace.parsed[input.params.textDocument.uri].package
 	ranges := _find_ranges(pkg.path, position)
 
-	count(ranges) > 0
+	ranges != []
 
 	# Note: pkg.path[0] is currently just {"type": "var", "value": "data"}
 	# which is useless, but an issue inherited from OPA we should get rid of in RoAST
@@ -76,7 +76,7 @@ import_ranges := [item |
 	imp := find.import_at_position with input.params.position as position
 	ranges := _find_ranges(imp.path, position)
 
-	count(ranges) > 0
+	ranges != []
 
 	# import locations don't include the full text of the line, so we'll need to
 	# improvise here some, assuming properly formatted Rego
@@ -92,7 +92,7 @@ rule_ranges := [item |
 	[rule, _] := find.rule_at_position with input.params.position as position
 	ranges := _find_ranges(rule, position)
 
-	count(ranges) > 0
+	ranges != []
 
 	item := _to_selection_range(ranges)
 ]
@@ -109,9 +109,9 @@ _find_ranges(node, position) := array.reverse([{"range": value_range} |
 
 # the SelectionRange object is recursive, so we need to reach for tricks here!
 _to_selection_range(ranges) := json.patch(ranges[0], [patch |
-	some i, r in array.slice(ranges, 1, count(ranges))
+	some i, arr in array.slice(ranges, 1, count(ranges))
 
-	patch := {"op": "add", "path": util.repeat("/parent", i + 1), "value": r}
+	patch := {"op": "add", "path": util.repeat("/parent", i + 1), "value": arr}
 ])
 
 _estimated_import_range(imp) := import_range if {

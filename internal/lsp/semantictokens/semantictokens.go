@@ -2,22 +2,20 @@ package semantictokens
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 
 	"strconv"
 	"strings"
 
-	"github.com/open-policy-agent/opa/v1/ast"
 	"github.com/open-policy-agent/regal/internal/lsp/types"
-	"github.com/open-policy-agent/regal/internal/ogre"
-	"github.com/open-policy-agent/regal/pkg/roast/rast"
-	"github.com/open-policy-agent/regal/pkg/roast/transform"
 )
 
 const (
 	TokenTypePackage  = 0
 	TokenTypeVariable = 1
+	TokenTypeImport   = 2
 )
 
 const (
@@ -26,122 +24,199 @@ const (
 )
 
 type Token struct {
-	Line      uint
-	Col       uint
-	Length    uint
-	Type      uint
-	Modifiers uint
+	Line      uint32
+	Col       uint32
+	Length    uint32
+	Type      uint32
+	Modifiers uint32
 }
 
-func Full(ctx context.Context, module *ast.Module) (*types.SemanticTokens, error) {
+// Represents location data from the AST
+type ASTLocation struct {
+	Location LocationInfo `json:"location"`
+}
+
+type LocationInfo struct {
+	Line        uint32
+	StartColumn uint32
+	EndColumn   uint32
+	Length      uint32
+}
+
+func (loc *ASTLocation) UnmarshalJSON(data []byte) error {
+	var location struct {
+		Location string
+	}
+	if err := json.Unmarshal(data, &location); err != nil {
+		return err
+	}
+
+	parts := strings.Split(location.Location, ":")
+
+	row, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return err
+	}
+
+	startcol, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return err
+	}
+
+	endcol, err := strconv.Atoi(parts[3])
+	if err != nil {
+		return err
+	}
+
+	loc.Location = LocationInfo{
+		Line:        uint32(row),
+		StartColumn: uint32(startcol),
+		EndColumn:   uint32(endcol),
+		Length:      uint32(endcol - startcol),
+	}
+
+	return nil
+}
+
+// Represents different token categories
+type ArgTokenCategory struct {
+	Declaration []ASTLocation `json:"declaration,omitempty"`
+	Reference   []ASTLocation `json:"reference,omitempty"`
+}
+
+// Represents the vars section containing different token categories
+type VarsSection struct {
+	ArgTokens           ArgTokenCategory `json:"function_args"`
+	ComprehensionTokens ArgTokenCategory `json:"comprehensions"`
+	EveryTokens         ArgTokenCategory `json:"every_expr"`
+	SomeTokens          ArgTokenCategory `json:"some_expr"`
+}
+
+// Represents the structured result from the Rego query
+type SemanticTokensResult struct {
+	PackageTokens []ASTLocation `json:"packages"`
+	ImportTokens  []ASTLocation `json:"imports"`
+	Vars          VarsSection   `json:"vars"`
+	DebugInfo     interface{}   `json:"debug_info"`
+}
+
+func Full(ctx context.Context, result SemanticTokensResult) (*types.SemanticTokens, error) {
 	tokens := make([]Token, 0)
 
-	packageTokens, err := extractPackageTokens(module)
+	packageTokens, err := processPackageTokens(result.PackageTokens)
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract package tokens: %w", err)
+		return nil, err
 	}
 	tokens = append(tokens, packageTokens...)
 
-	variableTokens, err := extractVariableTokens(ctx, module)
+	varTokens, err := processVariableTokens(result.Vars)
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract variable tokens: %w", err)
+		return nil, err
 	}
-	tokens = append(tokens, variableTokens...)
+	tokens = append(tokens, varTokens...)
+
+	importTokens, err := processImportTokens(result.ImportTokens)
+	if err != nil {
+		return nil, err
+	}
+	tokens = append(tokens, importTokens...)
 
 	return encodeTokens(tokens), nil
 }
 
-func extractPackageTokens(module *ast.Module) ([]Token, error) {
-	var tokens []Token
+func processPackageTokens(packageTokens []ASTLocation) ([]Token, error) {
+	tokens := make([]Token, 0)
 
-	if module.Package != nil && module.Package.Path != nil {
-		for _, term := range module.Package.Path[1:] {
-			packageString := term.Value.String()
-
-			trimmedValue := strings.Trim(packageString, `"`)
-			length := uint(len(trimmedValue))
-
-			tokens = append(tokens, Token{
-				Line:      uint(term.Location.Row - 1),
-				Col:       uint(term.Location.Col - 1),
-				Length:    length,
-				Type:      TokenTypePackage,
-				Modifiers: 0,
-			})
+	for _, pkgToken := range packageTokens {
+		token, err := extractTokens(pkgToken, TokenTypePackage, 0)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create package token: %w", err)
 		}
+		tokens = append(tokens, token)
 	}
 
 	return tokens, nil
 }
 
-var (
-	semanticTokensQuery = ast.MustParseBody(`arg_tokens = data.regal.lsp.semantictokens.arg_tokens`)
-)
+func processVariableTokens(vars VarsSection) ([]Token, error) {
+	tokens := make([]Token, 0)
 
-func extractVariableTokens(ctx context.Context, module *ast.Module) ([]Token, error) {
-	var tokens []Token
-
-	roastInput, err := transform.ToAST("policy.rego", "", module, true)
+	argTokens, err := processTokenCategory(vars.ArgTokens, "function argument")
 	if err != nil {
-		return nil, fmt.Errorf("failed to transform to roast format: %w", err)
+		return nil, err
+	}
+	tokens = append(tokens, argTokens...)
+
+	compTokens, err := processTokenCategory(vars.ComprehensionTokens, "comprehension")
+	if err != nil {
+		return nil, err
+	}
+	tokens = append(tokens, compTokens...)
+
+	everyTokens, err := processTokenCategory(vars.EveryTokens, "every construct")
+	if err != nil {
+		return nil, err
+	}
+	tokens = append(tokens, everyTokens...)
+
+	someTokens, err := processTokenCategory(vars.SomeTokens, "some construct")
+	if err != nil {
+		return nil, err
+	}
+	tokens = append(tokens, someTokens...)
+
+	return tokens, nil
+}
+
+func processTokenCategory(category ArgTokenCategory, categoryName string) ([]Token, error) {
+	tokens := make([]Token, 0)
+
+	for _, declToken := range category.Declaration {
+		token, err := extractTokens(declToken, TokenTypeVariable, ModifierDeclaration)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create %s declaration token: %w", categoryName, err)
+		}
+		tokens = append(tokens, token)
 	}
 
-	resultHandler := func(result ast.Value) error {
-		resultObj := result.(ast.Object)
-
-		resultObj.Foreach(func(varTerm, typeTerm *ast.Term) {
-			varObj := varTerm.Value.(ast.Object)
-			typeStr := string(typeTerm.Value.(ast.String))
-
-			locationStr := rast.GetString(varObj, "location")
-			varName := rast.GetString(varObj, "value")
-
-			trimmedVarName := strings.Trim(varName, `"' `)
-
-			rowStr, rest, _ := strings.Cut(locationStr, ":")
-			colStr, _, _ := strings.Cut(rest, ":")
-
-			row, _ := strconv.Atoi(rowStr)
-			col, _ := strconv.Atoi(colStr)
-
-			modifier := ModifierReference
-			if typeStr == "declaration" {
-				modifier = ModifierDeclaration
-			}
-
-			token := Token{
-				Line:      uint(row - 1),
-				Col:       uint(col - 1),
-				Length:    uint(len(trimmedVarName)),
-				Type:      TokenTypeVariable,
-				Modifiers: uint(modifier),
-			}
-			tokens = append(tokens, token)
-		})
-
-		return nil
-	}
-
-	q, err := ogre.New(semanticTokensQuery).Prepare(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to run ogre query: %w", err)
-	}
-
-	err = q.Evaluator().
-		WithInput(roastInput).
-		WithResultHandler(resultHandler).
-		Eval(ctx)
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to evaluate ogre query: %w", err)
+	for _, refToken := range category.Reference {
+		token, err := extractTokens(refToken, TokenTypeVariable, ModifierReference)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create %s reference token: %w", categoryName, err)
+		}
+		tokens = append(tokens, token)
 	}
 
 	return tokens, nil
+}
+
+func processImportTokens(importTokens []ASTLocation) ([]Token, error) {
+	tokens := make([]Token, 0)
+
+	for _, importToken := range importTokens {
+		token, err := extractTokens(importToken, TokenTypeImport, 0)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create import token: %w", err)
+		}
+		tokens = append(tokens, token)
+	}
+
+	return tokens, nil
+}
+
+func extractTokens(astLoc ASTLocation, tokenType uint32, modifiers uint32) (Token, error) {
+	return Token{
+		Line:      astLoc.Location.Line - 1,
+		Col:       astLoc.Location.StartColumn - 1,
+		Length:    astLoc.Location.Length,
+		Type:      tokenType,
+		Modifiers: modifiers,
+	}, nil
 }
 
 func encodeTokens(tokens []Token) *types.SemanticTokens {
 	if len(tokens) == 0 {
-		return &types.SemanticTokens{Data: []uint{}}
+		return &types.SemanticTokens{Data: []uint32{}}
 	}
 
 	// Sort tokens by position (line first, then column)
@@ -152,9 +227,9 @@ func encodeTokens(tokens []Token) *types.SemanticTokens {
 		return int(a.Col) - int(b.Col)
 	})
 
-	data := make([]uint, 0, len(tokens)*5)
+	data := make([]uint32, 0, len(tokens)*5)
 
-	var prevLine, prevCol uint
+	var prevLine, prevCol uint32
 
 	for _, tok := range tokens {
 		deltaLine := tok.Line - prevLine

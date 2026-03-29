@@ -31,6 +31,12 @@ type (
 		// EvalCodelensDisplayInline, if set, will show evaluation results natively
 		// in the calling editor, rather than in an output file.
 		EvalCodelensDisplayInline *bool `json:"evalCodelensDisplayInline,omitempty"`
+		// EnableExplorer, if set, will enable the regal.explorer command
+		// and related functionality.
+		EnableExplorer *bool `json:"enableExplorer,omitempty"`
+		// EnableServerTesting, if set, will enable test location notifications
+		// via the regal/testLocations and test running handler.
+		EnableServerTesting *bool `json:"enableServerTesting,omitempty"`
 	}
 
 	InitializeParams struct {
@@ -70,26 +76,46 @@ type (
 	}
 
 	ServerCapabilities struct {
-		CodeLensProvider           ResolveProviderOption   `json:"codeLensProvider"`
-		Workspace                  WorkspaceOptions        `json:"workspace"`
-		DiagnosticProvider         DiagnosticOptions       `json:"diagnosticProvider"`
-		CodeActionProvider         CodeActionOptions       `json:"codeActionProvider"`
-		ExecuteCommandProvider     ExecuteCommandOptions   `json:"executeCommandProvider"`
-		TextDocumentSyncOptions    TextDocumentSyncOptions `json:"textDocumentSync"`
-		CompletionProvider         CompletionOptions       `json:"completionProvider"`
-		InlayHintProvider          ResolveProviderOption   `json:"inlayHintProvider"`
-		DocumentLinkProvider       ResolveProviderOption   `json:"documentLinkProvider"`
-		SignatureHelpProvider      SignatureHelpOptions    `json:"signatureHelpProvider"`
-		SemanticTokensProvider     SemanticTokensOptions   `json:"semanticTokensProvider"`
-		DocumentHighlightProvider  bool                    `json:"documentHighlightProvider"`
-		HoverProvider              bool                    `json:"hoverProvider"`
-		DocumentFormattingProvider bool                    `json:"documentFormattingProvider"`
-		FoldingRangeProvider       bool                    `json:"foldingRangeProvider"`
-		DocumentSymbolProvider     bool                    `json:"documentSymbolProvider"`
-		WorkspaceSymbolProvider    bool                    `json:"workspaceSymbolProvider"`
-		DefinitionProvider         bool                    `json:"definitionProvider"`
-		SelectionRangeProvider     bool                    `json:"selectionRangeProvider"`
-		LinkedEditingRangeProvider bool                    `json:"linkedEditingRangeProvider"`
+		CodeLensProvider           ResolveProviderOption     `json:"codeLensProvider"`
+		Workspace                  WorkspaceOptions          `json:"workspace"`
+		DiagnosticProvider         DiagnosticOptions         `json:"diagnosticProvider"`
+		CodeActionProvider         CodeActionOptions         `json:"codeActionProvider"`
+		ExecuteCommandProvider     ExecuteCommandOptions     `json:"executeCommandProvider"`
+		TextDocumentSyncOptions    TextDocumentSyncOptions   `json:"textDocumentSync"`
+		CompletionProvider         CompletionOptions         `json:"completionProvider"`
+		InlayHintProvider          ResolveProviderOption     `json:"inlayHintProvider"`
+		DocumentLinkProvider       ResolveProviderOption     `json:"documentLinkProvider"`
+		SignatureHelpProvider      SignatureHelpOptions      `json:"signatureHelpProvider"`
+		SemanticTokensProvider     SemanticTokensOptions     `json:"semanticTokensProvider"`
+		DocumentHighlightProvider  bool                      `json:"documentHighlightProvider"`
+		HoverProvider              bool                      `json:"hoverProvider"`
+		DocumentFormattingProvider bool                      `json:"documentFormattingProvider"`
+		FoldingRangeProvider       bool                      `json:"foldingRangeProvider"`
+		DocumentSymbolProvider     bool                      `json:"documentSymbolProvider"`
+		WorkspaceSymbolProvider    bool                      `json:"workspaceSymbolProvider"`
+		DefinitionProvider         bool                      `json:"definitionProvider"`
+		SelectionRangeProvider     bool                      `json:"selectionRangeProvider"`
+		LinkedEditingRangeProvider bool                      `json:"linkedEditingRangeProvider"`
+		Experimental               *ExperimentalCapabilities `json:"experimental,omitempty"`
+	}
+
+	// ExperimentalCapabilities contains Regal-specific custom LSP features
+	// that are not part of the base LSP specification. 'Experimental' comes
+	// from the field name in the spec, rather than their status. 'Experimental'
+	// features are more just 'custom' features we have build on the LSP.
+	ExperimentalCapabilities struct {
+		// ExplorerProvider indicates whether the server supports the regal.explorer
+		// command and regal/showExplorerResult notification.
+		ExplorerProvider bool `json:"explorerProvider"`
+		// InlineEvalProvider indicates whether the server supports the regal.eval
+		// command response being sent rather than written to file.
+		InlineEvalProvider bool `json:"inlineEvalProvider"`
+		// DebugProvider indicates whether the server supports the regal.debug
+		// command and regal/startDebugging request.
+		DebugProvider bool `json:"debugProvider"`
+		// OPATestProvider indicates whether the server supports testing-related features
+		// including running Rego tests via LSP command and test location notifications.
+		OPATestProvider bool `json:"opaTestProvider"`
 	}
 
 	TextDocumentPositionParams struct {
@@ -557,8 +583,8 @@ type (
 	}
 
 	SemanticTokens struct {
-		ResultID *string `json:"resultId,omitempty"`
-		Data     []uint  `json:"data"`
+		ResultID *string  `json:"resultId,omitempty"`
+		Data     []uint32 `json:"data"`
 	}
 
 	SemanticTokensParams struct {
@@ -573,6 +599,36 @@ type (
 	SemanticTokensOptions struct {
 		Legend SemanticTokensLegend `json:"legend"`
 		Full   bool                 `json:"full,omitempty"`
+	}
+
+	ExplorerCommandArgs struct {
+		Target      string `json:"target"`
+		Strict      bool   `json:"strict,omitempty"`
+		Annotations bool   `json:"annotations,omitempty"`
+		Print       bool   `json:"print,omitempty"`
+		Format      bool   `json:"format,omitempty"`
+	}
+
+	ExplorerStageResult struct {
+		Name   string `json:"name"`
+		Output string `json:"output"`
+		Error  bool   `json:"error"`
+	}
+
+	ExplorerResult struct {
+		Stages []ExplorerStageResult `json:"stages"`
+		Plan   string                `json:"plan,omitempty"`
+	}
+
+	ShowDocumentParams struct {
+		URI       string `json:"uri"`
+		External  *bool  `json:"external,omitempty"`
+		TakeFocus *bool  `json:"takeFocus,omitempty"`
+		Selection *Range `json:"selection,omitempty"`
+	}
+
+	ShowDocumentResult struct {
+		Success bool `json:"success"`
 	}
 
 	iuint interface{ ~int | ~uint }

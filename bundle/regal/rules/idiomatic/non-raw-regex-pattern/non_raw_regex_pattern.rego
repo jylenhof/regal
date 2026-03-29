@@ -12,7 +12,6 @@ report contains violation if {
 
 	value := ast.found.calls[_][_]
 
-	value[0].value[0].type == "var"
 	value[0].value[0].value == "regex"
 
 	# The name following "regex.", e.g. "match"
@@ -24,9 +23,8 @@ report contains violation if {
 
 	loc := util.to_location_object(value[pos].location)
 	row := input.regal.file.lines[loc.row - 1]
-	chr := substring(row, loc.col - 1, 1)
 
-	chr == `"`
+	substring(row, loc.col - 1, 1) == `"`
 
 	violation := result.fail(rego.metadata.chain(), result.location(value[pos]))
 }

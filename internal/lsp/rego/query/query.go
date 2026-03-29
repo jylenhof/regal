@@ -27,6 +27,7 @@ const (
 	Keywords          = "data.regal.ast.keywords"
 	RuleHeadLocations = "data.regal.ast.rule_head_locations"
 	MainEval          = "data.regal.lsp.main.eval"
+	TestLocations     = "data.regal.lsp.testlocations.result"
 )
 
 var simpleRefPattern = regexp.MustCompile(`^[a-zA-Z.]$`)
@@ -202,6 +203,7 @@ var schemaResolvers = sync.OnceValue(func() (resolvers []func(*rego.Rego)) {
 				if len(s.Schema) == 0 || added.Contains(s.Schema.String()) {
 					continue
 				}
+
 				resolvers = append(resolvers, rego.Resolver(
 					ast.DefaultRootRef.Extend(s.Schema),
 					schemaResolver{value: ast.MustInterfaceToValue(ss.Get(s.Schema))},

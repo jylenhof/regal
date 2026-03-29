@@ -6,6 +6,8 @@ import (
 	jsoniter "github.com/json-iterator/go"
 
 	"github.com/open-policy-agent/opa/v1/ast"
+
+	"github.com/open-policy-agent/regal/internal/roast/encoding/write"
 )
 
 type arrayComprehensionCodec struct{}
@@ -19,11 +21,11 @@ func (*arrayComprehensionCodec) Encode(ptr unsafe.Pointer, stream *jsoniter.Stre
 
 	stream.WriteObjectStart()
 
-	stream.WriteObjectField(strTerm)
-	stream.WriteVal(ac.Term)
+	stream.WriteObjectField("term")
+	write.Term(stream, ac.Term)
 	stream.WriteMore()
-	stream.WriteObjectField(strBody)
-	stream.WriteVal(ac.Body)
+	stream.WriteObjectField("body")
+	write.ValsArray(stream, ac.Body)
 
 	stream.WriteObjectEnd()
 }

@@ -8,7 +8,7 @@
 <!-- markdownlint-disable MD041 -->
 
 [![Build Status](https://github.com/open-policy-agent/regal/workflows/Build/badge.svg)](https://github.com/open-policy-agent/regal/actions)
-![OPA v1.13.1](https://www.openpolicyagent.org/badge/v1.13.1)
+![OPA v1.14.0](https://www.openpolicyagent.org/badge/v1.14.0)
 [![codecov](https://codecov.io/github/open-policy-agent/regal/graph/badge.svg?token=EQK01YF3X3)](https://codecov.io/github/StyraInc/regal)
 [![Downloads](https://img.shields.io/github/downloads/open-policy-agent/regal/total.svg)](https://github.com/open-policy-agent/regal/releases)
 
@@ -77,10 +77,16 @@ See the [adopters](https://www.openpolicyagent.org/projects/regal/adopters) file
 
 ### Download Regal
 
-**MacOS and Linux**
-
 ```shell
+# macOS
 brew install regal
+
+# linux x86
+curl -L -o regal https://github.com/open-policy-agent/regal/releases/latest/download/regal_Linux_x86_64
+chmod 755 ./regal
+
+# windows
+Invoke-WebRequest -Uri "https://github.com/open-policy-agent/regal/releases/latest/download/regal_Windows_x86_64.exe" -OutFile "regal.exe"
 ```
 
 **Linux, MacOS, and Windows using mise**
@@ -92,10 +98,7 @@ mise use -g regal@latest
 ```
 
 <details>
-  <summary><strong>Other Installation Options</strong></summary>
-
-Please see [Packages](https://www.openpolicyagent.org/projects/regal/adopters#packaging)
-for a list of package repositories which distribute Regal.
+  <summary><strong>Other Installation Options & Packages</strong></summary>
 
 Manual installation commands:
 
@@ -111,30 +114,30 @@ curl -L -o regal "https://github.com/open-policy-agent/regal/releases/latest/dow
 curl -L -o regal "https://github.com/open-policy-agent/regal/releases/latest/download/regal_Darwin_x86_64"
 ```
 
-**Linux (x86_64)**
+**Linux (arm64)**
 
 ```shell
-curl -L -o regal "https://github.com/open-policy-agent/regal/releases/latest/download/regal_Linux_x86_64"
-chmod +x regal
-```
-
-**Windows**
-
-```shell
-curl.exe -L -o regal.exe "https://github.com/open-policy-agent/regal/releases/latest/download/regal_Windows_x86_64.exe"
+curl -L -o regal "https://github.com/open-policy-agent/regal/releases/latest/download/regal_Linux_arm64"
+chmod 755 ./regal
 ```
 
 **Docker**
 
 ```shell
-docker pull ghcr.io/styrainc/regal:latest
+docker pull ghcr.io/open-policy-agent/regal:latest
 ```
+
+Please see [Packages](https://www.openpolicyagent.org/projects/regal/adopters#packaging)
+for a list of package repositories which distribute Regal.
 
 See all versions, and checksum files, at the Regal [releases](https://github.com/open-policy-agent/regal/releases/)
 page, and published Docker images at the [packages](https://github.com/open-policy-agent/regal/pkgs/container/regal)
 page.
 
 </details>
+
+
+<!-- markdownlint-disable MD041 -->
 
 ### Try it out!
 

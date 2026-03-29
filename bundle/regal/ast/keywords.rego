@@ -9,19 +9,19 @@ import data.regal.util
 # METADATA
 # description: collects the `if` keyword. this isn't present in the AST, so we'll simply scan the input lines
 keywords[row] contains keyword if {
-	some idx, line in input.regal.file.lines
+	some i, line in input.regal.file.lines
 
 	col := indexof(line, " if ")
 	col > 0
 
-	row := idx + 1
+	row := i + 1
 
 	not row in _comment_row_index
 
 	keyword := {
 		"name": "if",
 		"location": {
-			"row": idx + 1,
+			"row": i + 1,
 			"col": col + 2,
 		},
 	}
@@ -88,14 +88,14 @@ _keywords_with_location(value) := keywords if {
 	value.terms.symbols
 
 	location := util.to_location_object(value.terms.location)
-	keywords := array.concat([{"name": "some", "location": location}], _in_on_row(location.row))
+	keywords := array.flatten([{"name": "some", "location": location}, _in_on_row(location.row)])
 }
 
 _keywords_with_location(value) := keywords if {
 	value.domain
 
 	location := util.to_location_object(value.location)
-	keywords := array.concat([{"name": "every", "location": location}], _in_on_row(location.row))
+	keywords := array.flatten([{"name": "every", "location": location}, _in_on_row(location.row)])
 }
 
 _in_on_row(row) := [keyword |

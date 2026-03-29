@@ -17,7 +17,11 @@ report contains violation if {
 
 	some ref in ast.found.refs[rule_index]
 
-	vars_in_ref := ast.find_ref_vars(ref)
+	vars_in_ref := [term |
+		some term in array.slice(ref.value, 1, 100)
+
+		term.type == "var"
+	]
 	vars_in_ref != []
 
 	# we don't need the location of each var, but using the first
@@ -58,14 +62,14 @@ _invalid_some_location(rule, location) if {
 
 	value.location == location
 
-	_invalid_some_context(rule, array.concat([node], path))
+	_invalid_some_context(rule, array.flatten([node, path]))
 }
 
 # don't recommend `some .. in` if iteration occurs inside of arrays, objects, or sets
 _invalid_some_context(rule, path) if {
-	some p in util.all_paths(path)
+	some arr in util.all_paths(path)
 
-	node := object.get(rule, p, false)
+	node := object.get(rule, arr, false)
 
 	_impossible_some(node)
 }
@@ -76,9 +80,9 @@ _invalid_some_context(rule, path) if {
 # not _directly_ replaceable by `some .. in`, so we'll leave it
 # be here
 _invalid_some_context(rule, path) if {
-	some p in util.all_paths(path)
+	some arr in util.all_paths(path)
 
-	node := object.get(rule, p, [])
+	node := object.get(rule, arr, [])
 
 	node.terms[0].type == "ref"
 	node.terms[0].value[0].type == "var"

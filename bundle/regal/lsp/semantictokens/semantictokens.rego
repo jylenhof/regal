@@ -4,39 +4,38 @@
 #     - declarations of function args in text documents
 #     - variable references that are used in function calls
 #     - variable references that are used in expressions
+#     - variables declarations and references in comprehensions
+#     - variables declarations and references in every/some keyword domains
 # related_resources:
 #   - https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_semanticTokens
+# schemas:
+#   - input:        schema.regal.lsp.common
+#   - input.params: schema.regal.lsp.semantictokens
 package regal.lsp.semantictokens
 
-import data.regal.ast
+import data.regal.lsp.semantictokens.vars.comprehensions
+import data.regal.lsp.semantictokens.vars.every_expr
+import data.regal.lsp.semantictokens.vars.function_args
+import data.regal.lsp.semantictokens.vars.imports
+import data.regal.lsp.semantictokens.vars.packages
+import data.regal.lsp.semantictokens.vars.some_expr
 
 # METADATA
-# description: finds declarations of function args in text documents
-arg_tokens[var] := "declaration" if {
-	some rule_index, contexts in ast.found.vars
-	some var in contexts.args
-}
+# description: Get the module from workspace
+module := data.workspace.parsed[input.params.textDocument.uri]
+
+# This is handling the case where the module from the parsed workspace is empty
+default result["response"] := {}
 
 # METADATA
-# description: finds variable references that are used in function calls
-arg_tokens[var] := "reference" if {
-	some rule_index, calls in ast.function_calls
-	some call in calls
-	some var in call.args
-	var.type == "var"
-
-	arg_names := {v.value | some v in ast.found.vars[rule_index].args}
-	var.value in arg_names
-}
-
-# METADATA
-# description: finds variable references that are used in expressions
-arg_tokens[var] := "reference" if {
-	some rule_index, expressions in ast.found.expressions
-	some expr in expressions
-	some var in expr.terms
-	var.type == "var"
-
-	arg_names := {v.value | some v in ast.found.vars[rule_index].args}
-	var.value in arg_names
+# entrypoint: true
+result["response"] := {
+	"packages": packages.result,
+	"imports": imports.result,
+	"vars": {
+		"function_args": function_args.result,
+		"comprehensions": comprehensions.result,
+		"every_expr": every_expr.result,
+		"some_expr": some_expr.result,
+	},
 }

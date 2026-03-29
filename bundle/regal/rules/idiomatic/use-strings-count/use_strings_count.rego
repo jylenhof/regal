@@ -15,6 +15,8 @@ notices contains result.notice(rego.metadata.chain()) if not capabilities.has_st
 # METADATA
 # description: flag calls to `count` where the first argument is a call to `indexof_n`
 report contains violation if {
+	"indexof_n" in ast.builtin_functions_called
+
 	ref := ast.found.calls[_][_]
 
 	ref[0].value[0].type == "var"
@@ -24,8 +26,11 @@ report contains violation if {
 	ref[1].value[0].value[0].type == "var"
 	ref[1].value[0].value[0].value == "indexof_n"
 
-	loc1 := result.location(ref[0])
-	loc2 := result.location(ref[1])
-
-	violation := result.fail(rego.metadata.chain(), result.ranged_location_between(loc1, loc2))
+	violation := result.fail(
+		rego.metadata.chain(),
+		result.ranged_location_between(
+			result.location(ref[0]),
+			result.location(ref[1]),
+		),
+	)
 }

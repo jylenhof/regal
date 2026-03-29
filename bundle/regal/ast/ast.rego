@@ -102,8 +102,9 @@ rules := [rule |
 # description: all the test rules in the input AST
 tests := [rule |
 	some rule in rules
+	some term in rule.head.ref
 
-	startswith(rule.head.ref[0].value, "test_")
+	startswith(term.value, "test_")
 ]
 
 # METADATA
@@ -123,8 +124,8 @@ public_rules_and_functions := [rule |
 	some rule in input.rules
 	not startswith(rule.head.ref[0].value, "_")
 
-	every part in array.slice(rule.head.ref, 1, 100) {
-		[part.type, startswith(part.value, "_")] != ["string", true]
+	every term in array.slice(rule.head.ref, 1, 100) {
+		[term.type, startswith(term.value, "_")] != ["string", true]
 	}
 ]
 
@@ -134,7 +135,7 @@ function_arg_names(rule) := [arg.value | some arg in rule.head.args]
 
 # METADATA
 # description: all the rule and function names in the input AST
-rule_and_function_names contains ref_static_to_string(rule.head.ref) if some rule in input.rules
+rule_and_function_names contains name if some name in rule_names_ordered
 
 # METADATA
 # description: all identifiers in the input AST (rule and function names, plus imported names)
@@ -142,7 +143,15 @@ identifiers := rule_and_function_names | imported_identifiers
 
 # METADATA
 # description: all rule names in the input AST (excluding functions)
-rule_names contains ref_static_to_string(rule.head.ref) if some rule in rules
+rule_names contains name if {
+	some i, name in rule_names_ordered
+
+	not input.rules[i].head.args
+}
+
+# METADATA
+# description: all rule and function names in the input AST indexed by position
+rule_names_ordered := [ref_static_to_string(rule.head.ref) | some rule in input.rules]
 
 # METADATA
 # description: |
@@ -189,80 +198,73 @@ function_calls[rule_index] contains call if {
 	some ref in found.calls[rule_index]
 
 	name := ref_to_string(ref[0].value)
-	args := [arg |
-		some i, arg in array.slice(ref, 1, 100)
-
-		not _exclude_arg(name, i, arg.type)
-	]
-
 	call := {
 		"name": name,
 		"location": ref[0].location,
-		"args": args,
+		"args": [arg |
+			some i, arg in array.slice(ref, 1, 100)
+
+			arg.type != "call"
+			["assign", 0] != [name, i]
+		],
 	}
 }
 
-# exclude arg if:
-# - first "arg" of assign is the variable to assign to
-# - call - covered elsewhere
-_exclude_arg(_, _, "call")
-_exclude_arg("assign", 0, _)
-
 # METADATA
 # description: |
-#   true if both ref values (or "paths") are equal in type
+#   true if both ref values (terms) are equal in type
 #   and value for each path component, ignoring locations
-ref_value_equal(v1, v2) if {
-	count(v1) == count(v2)
+ref_value_equal(terms, other) if {
+	count(terms) == count(other)
 
-	every i, part in v1 {
-		part.type == v2[i].type
-		part.value == v2[i].value
+	every i, term in terms {
+		term.type == other[i].type
+		term.value == other[i].value
 	}
 }
 
 # METADATA
 # description: |
-#   returns a new ref value made by extending terms1 with terms2,
-#   where the first term of terms2 transformed to string
-extend_ref_terms(terms1, terms2) := array.flatten([
-	terms1,
-	object.union(terms2[0], {"type": "string"}),
-	array.slice(terms2, 1, 100),
+#   returns a new terms array made by extending terms with other,
+#   where the first term of other transformed to string
+extend_ref_terms(terms, other) := array.flatten([
+	terms,
+	object.union(other[0], {"type": "string"}),
+	array.slice(other, 1, 100),
 ])
 
 # METADATA
 # description: |
-#   true if all terms in `terms1` are also present in `terms2`
+#   true if all terms in `terms` are also present in `other`
 #   regardless of length, and ignoring locations
-is_terms_subset(terms1, terms2) if {
-	count(terms1) <= count(terms2)
+is_terms_subset(terms, other) if {
+	count(terms) <= count(other)
 
-	every i, term in terms1 {
-		term.type == terms2[i].type
-		term.value == terms2[i].value
+	every i, term in terms {
+		term.type == other[i].type
+		term.value == other[i].value
 	}
 }
 
 # METADATA
 # description: returns the "path" string of any given ref value
-ref_to_string(ref) := concat("", array.flatten([ref[0].value, [_format_part(part) |
-	some part in array.slice(ref, 1, 100)
+ref_to_string(ref) := concat("", array.flatten([ref[0].value, [_format_term(term) |
+	some term in array.slice(ref, 1, 100)
 
-	not part.type in {"call", "ref", "templatestring"}
+	not term.type in {"call", "ref", "templatestring"}
 ]]))
 
-_format_part(part) := concat("", [".", part.value]) if {
-	part.type == "string"
-	regex.match(`^[a-zA-Z_][a-zA-Z1-9_]*$`, part.value)
+_format_term(term) := concat("", [".", term.value]) if {
+	term.type == "string"
+	regex.match(`^[a-zA-Z_][a-zA-Z1-9_]*$`, term.value)
 } else := sprintf(
 	{
 		"string": `["%v"]`,
 		"var": `[%v]`,
 		"number": `[%d]`,
 		"boolean": `[%v]`,
-	}[part.type],
-	[part.value],
+	}[term.type],
+	[term.value],
 )
 
 # METADATA
@@ -273,9 +275,9 @@ _format_part(part) := concat("", [".", part.value]) if {
 #   foo.bar[baz] -> foo.bar
 ref_static_to_string(ref) := ref_to_string(array.slice(ref, 0, first_non_static)) if {
 	first_non_static := [i |
-		some i, part in ref
+		some i, term in ref
 		i > 0
-		part.type in {"call", "var", "ref", "templatestring"}
+		term.type in {"call", "var", "ref", "templatestring"}
 	][0]
 } else := ref_to_string(ref)
 
@@ -284,10 +286,10 @@ ref_static_to_string(ref) := ref_to_string(array.slice(ref, 0, first_non_static)
 static_ref(ref) if not _non_static_ref(ref)
 
 # optimized inverse of static_ref benefitting from early exit
-# 128 is used only as a reasonable (well...) upper limit for a ref, but the
+# 100 is used only as a reasonable (well...) upper limit for a ref, but the
 # slice will be capped at the length of the ref anyway (avoids count)
 # regal ignore:narrow-argument
-_non_static_ref(ref) if array.slice(ref.value, 1, 128)[_].type in {"call", "var", "ref", "templatestring"}
+_non_static_ref(ref) if array.slice(ref.value, 1, 100)[_].type in {"call", "var", "ref", "templatestring"}
 
 # METADATA
 # description: provides a set of names of all built-in functions called in the input policy
@@ -314,12 +316,7 @@ function_ret_in_args(fn_name, terms) if {
 	# special case: print does not have a last argument as it's variadic
 	fn_name != "print"
 
-	rest := array.slice(terms, 1, 100)
-
-	# for now, bail out of nested calls
-	not "call" in {term.type | some term in rest}
-
-	count(rest) > count(all_functions[fn_name].decl.args)
+	terms[count(all_functions[fn_name].decl.args) + 1]
 }
 
 # METADATA
@@ -349,7 +346,7 @@ all_function_namespaces := builtin_namespaces | custom_function_namespaces
 
 # METADATA
 # description: set containing the namespaces of all custom functions
-custom_function_namespaces contains regex.replace(name, `\..*`, "") if some name in object.keys(function_decls)
+custom_function_namespaces contains regex.replace(name, `\..*`, "") if some name, _ in function_decls
 
 # METADATA
 # description: |
@@ -372,11 +369,11 @@ is_chained_rule_body(rule, lines) if {
 # description: answers whether variable of `name` is found anywhere in provided rule `head`
 # scope: document
 var_in_head(head, name) if {
-	some part in ["key", "value"]
-	has_named_var(head[part], name)
+	some type in ["key", "value"]
+	has_named_var(head[type], name)
 } else if {
-	some part in array.slice(head.ref, 1, 100)
-	has_named_var(part, name)
+	some term in array.slice(head.ref, 1, 100)
+	has_named_var(term, name)
 }
 
 # METADATA
@@ -403,8 +400,8 @@ assignment_terms(terms) := [terms[1], terms[2]] if is_assignment(terms[0])
 #   For a given rule head name, this rule contains a list of locations where
 #   there is a rule head with that name.
 rule_head_locations[name] contains {"row": loc.row, "col": loc.col} if {
-	some rule in input.rules
+	some i, rule in input.rules
 
-	name := concat(".", ["data", package_name, ref_static_to_string(rule.head.ref)])
+	name := $"data.{package_name}.{rule_names_ordered[i]}"
 	loc := util.to_location_object(rule.head.location)
 }

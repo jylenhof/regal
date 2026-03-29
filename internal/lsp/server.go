@@ -26,6 +26,7 @@ import (
 	"github.com/open-policy-agent/regal/bundle"
 	"github.com/open-policy-agent/regal/internal/capabilities"
 	"github.com/open-policy-agent/regal/internal/compile"
+	"github.com/open-policy-agent/regal/internal/explorer"
 	rio "github.com/open-policy-agent/regal/internal/io"
 	"github.com/open-policy-agent/regal/internal/io/files"
 	"github.com/open-policy-agent/regal/internal/lsp/bundles"
@@ -41,7 +42,6 @@ import (
 	"github.com/open-policy-agent/regal/internal/lsp/log"
 	"github.com/open-policy-agent/regal/internal/lsp/rego"
 	"github.com/open-policy-agent/regal/internal/lsp/rego/query"
-	"github.com/open-policy-agent/regal/internal/lsp/semantictokens"
 	"github.com/open-policy-agent/regal/internal/lsp/types"
 	"github.com/open-policy-agent/regal/internal/lsp/uri"
 	rparse "github.com/open-policy-agent/regal/internal/parse"
@@ -77,7 +77,6 @@ var (
 	noInlayHints                            any = make([]types.InlayHint, 0)
 	noWorkspaceFullDocumentDiagnosticReport any = make([]types.WorkspaceFullDocumentDiagnosticReport, 0)
 	emptyStruct                             any = struct{}{}
-	noTokenRequests                         any = &types.SemanticTokens{Data: []uint{}}
 
 	noDiagnostics = make([]types.Diagnostic, 0)
 	orc           = oracle.New()
@@ -95,6 +94,17 @@ var (
 	fixRedundantExistence     = &fixes.RedundantExistenceCheck{}
 )
 
+// DefaultServerFeatureFlags returns the default feature flags with all
+// custom features enabled.
+func DefaultServerFeatureFlags() *types.ServerFeatureFlags {
+	return &types.ServerFeatureFlags{
+		ExplorerProvider:         true,
+		InlineEvaluationProvider: true,
+		DebugProvider:            true,
+		OPATestProvider:          true,
+	}
+}
+
 type LanguageServerOptions struct {
 	// Logger is the logger to use for the language server.
 	Logger *log.Logger
@@ -105,10 +115,15 @@ type LanguageServerOptions struct {
 	// changes or when running in extremely slow environments like GHA with
 	// the go race detector on. TODO, work out why this is required.
 	WorkspaceDiagnosticsPoll time.Duration
+
+	// FeatureFlags defines which custom features are enabled.
+	// If not provided, DefaultServerFeatureFlags() will be used.
+	FeatureFlags *types.ServerFeatureFlags
 }
 
 type LanguageServer struct {
-	log *log.Logger
+	log          *log.Logger
+	featureFlags types.ServerFeatureFlags
 
 	regoStore storage.Store
 	conn      *jsonrpc2.Conn
@@ -128,13 +143,18 @@ type LanguageServer struct {
 	bundleCache *bundles.Cache
 	queryCache  *query.Cache
 
-	regoRouter *rego.RegoRouter
+	regoRouter      *rego.RegoRouter
+	testingCompiler *ast.Compiler
+
+	// initializationGate blocks workers until the initialized notification is received
+	initializationGate chan struct{}
 
 	commandRequest       chan types.ExecuteCommandParams
 	lintWorkspaceJobs    chan lintWorkspaceJob
 	lintFileJobs         chan lintFileJob
 	builtinsPositionJobs chan lintFileJob
 	templateFileJobs     chan lintFileJob
+	testLocationJobs     chan lintFileJob
 	prepareQueryJobs     chan struct{}
 
 	// templatingFiles tracks files currently being templated to ensure
@@ -183,23 +203,35 @@ func NewLanguageServerMinimal(ctx context.Context, opts *LanguageServerOptions, 
 	qc := query.NewCache()
 	store := NewRegalStore()
 
+	// Use provided feature flags, or defaults if not set
+	featureFlags := opts.FeatureFlags
+	if featureFlags == nil {
+		featureFlags = DefaultServerFeatureFlags()
+	}
+
 	ls := &LanguageServer{
 		cache:                       c,
 		queryCache:                  qc,
 		loadedConfig:                cfg,
 		regoStore:                   store,
 		log:                         opts.Logger,
+		featureFlags:                *featureFlags,
+		initializationGate:          make(chan struct{}),
 		lintFileJobs:                make(chan lintFileJob, 10),
 		lintWorkspaceJobs:           make(chan lintWorkspaceJob, 10),
 		builtinsPositionJobs:        make(chan lintFileJob, 10),
 		commandRequest:              make(chan types.ExecuteCommandParams, 10),
 		templateFileJobs:            make(chan lintFileJob, 10),
+		testLocationJobs:            make(chan lintFileJob, 10),
 		prepareQueryJobs:            make(chan struct{}, 1),
 		templatingFiles:             concurrent.MapOf(make(map[string]bool)),
-		webServer:                   web.NewServer(c, opts.Logger),
+		webServer:                   web.NewServer(opts.Logger),
 		loadedBuiltins:              concurrent.MapOf(make(map[string]map[string]*ast.Builtin)),
 		workspaceDiagnosticsPoll:    opts.WorkspaceDiagnosticsPoll,
 		loadedConfigAllRegoVersions: concurrent.MapOf(make(map[string]ast.RegoVersion)),
+		testingCompiler: compile.NewCompilerWithRegalBuiltins().
+			WithEnablePrintStatements(true).
+			WithUseTypeCheckAnnotations(true),
 	}
 
 	ls.regoRouter = rego.NewRegoRouter(ctx, store, qc, rego.Providers{
@@ -232,13 +264,13 @@ func (l *LanguageServer) Handle(ctx context.Context, _ *jsonrpc2.Conn, req *json
 	case "initialize":
 		return handler.WithContextAndParams(ctx, req, l.handleInitialize)
 	case "initialized":
-		return l.handleInitialized()
+		return l.handleInitialized(ctx)
 	case "textDocument/definition":
 		return handler.WithParams(req, l.handleTextDocumentDefinition)
 	case "textDocument/diagnostic":
 		return l.handleTextDocumentDiagnostic()
 	case "textDocument/didOpen":
-		return handler.WithContextAndParams(ctx, req, l.handleTextDocumentDidOpen)
+		return handler.WithParams(req, l.handleTextDocumentDidOpen)
 	case "textDocument/didClose":
 		return handler.WithParams(req, l.handleTextDocumentDidClose)
 	case "textDocument/didSave":
@@ -255,8 +287,6 @@ func (l *LanguageServer) Handle(ctx context.Context, _ *jsonrpc2.Conn, req *json
 		return handler.WithParams(req, l.handleTextDocumentHover)
 	case "textDocument/inlayHint":
 		return handler.WithParams(req, l.handleTextDocumentInlayHint)
-	case "textDocument/semanticTokens/full":
-		return handler.WithContextAndParams(ctx, req, l.handleTextDocumentSemanticTokensFull)
 	case "workspace/didChangeWatchedFiles":
 		return handler.WithParams(req, l.handleWorkspaceDidChangeWatchedFiles)
 	case "workspace/diagnostic":
@@ -271,6 +301,8 @@ func (l *LanguageServer) Handle(ctx context.Context, _ *jsonrpc2.Conn, req *json
 		return handler.WithParams(req, l.handleWorkspaceExecuteCommand)
 	case "workspace/symbol":
 		return l.handleWorkspaceSymbol()
+	case "regal/runTests":
+		return handler.WithContextAndParams(ctx, req, l.handleRunTests)
 	case "shutdown":
 		// no-op as we wait for the exit signal before closing channel
 		return emptyStruct, nil
@@ -330,10 +362,23 @@ func (l *LanguageServer) StartDiagnosticsWorker(ctx context.Context) {
 
 				// updateParse will not return an error when the parsing failed,
 				// but only when it was impossible to parse the file.
-				if _, err := updateParse(ctx, l.parseOpts(job.URI, l.builtinsForCurrentCapabilities())); err != nil {
+				parseSuccess, err := updateParse(ctx, l.parseOpts(job.URI, l.builtinsForCurrentCapabilities()))
+				if err != nil {
 					l.log.Message("failed to update module for %s: %s", job.URI, err)
 
 					continue
+				}
+
+				// Send test locations update after parse completes (if client supports it)
+				if l.client.SupportsOPATestProvider() {
+					if parseSuccess {
+						l.testLocationJobs <- lintFileJob{Reason: job.Reason, URI: job.URI}
+					} else {
+						// Parse failed, send empty test locations
+						if err := l.sendTestLocations(ctx, job.URI, []any{}); err != nil {
+							l.log.Message("failed to send empty test locations after parse failure: %s", err)
+						}
+					}
 				}
 
 				// lint the file and send the diagnostics
@@ -569,6 +614,15 @@ func (l *LanguageServer) StartCommandWorker(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case params := <-l.commandRequest:
+			if params.Command == "regal.explorer" {
+				if err := l.handleExplorerCommand(ctx, params); err != nil {
+					l.log.Message("failed to handle explorer command: %s", err)
+				}
+
+				continue
+			}
+
+			// Handle all other commands (they use string arguments)
 			var (
 				editParams *types.ApplyWorkspaceEditParams
 				args       types.CommandArgs
@@ -629,6 +683,18 @@ func (l *LanguageServer) StartCommandWorker(ctx context.Context) {
 			case "regal.eval":
 				err = l.handleEvalCommand(ctx, args)
 			case "regal.debug":
+				if !l.client.SupportsDebugCodeLens() {
+					l.log.Message("regal.debug command called but client does not support debug functionality")
+
+					break
+				}
+
+				if !l.featureFlags.DebugProvider {
+					l.log.Message("regal.debug command called but disabled in server")
+
+					break
+				}
+
 				if args.Target == "" || args.Query == "" {
 					l.log.Message("expected command target and query, got target %q, query %q", args.Target, args.Query)
 
@@ -875,10 +941,7 @@ func (l *LanguageServer) loadConfig(ctx context.Context, conf config.Config) {
 // config. These take some time to compute and only change when config changes,
 // so we can store them on the server to speed up diagnostic runs.
 func (l *LanguageServer) loadEnabledRulesFromConfig(ctx context.Context, cfg config.Config) error {
-	lint := linter.NewLinter().WithUserConfig(cfg)
-	if customRulesPath := l.getCustomRulesPath(); customRulesPath != "" {
-		lint = lint.WithCustomRules([]string{customRulesPath})
-	}
+	lint := linter.NewLinter().WithUserConfig(cfg).WithCustomRulesPaths(l.getCustomRulesPath())
 
 	regular, aggregate, err := lint.DetermineEnabledRules(ctx)
 	if err != nil {
@@ -919,11 +982,6 @@ func (l *LanguageServer) processTemplateJob(ctx context.Context, job lintFileJob
 	// to work
 	l.cache.SetFileContents(job.URI, newContents)
 
-	edits := []any{types.TextDocumentEdit{
-		TextDocument: types.OptionalVersionedTextDocumentIdentifier{URI: job.URI},
-		Edits:        ComputeEdits("", newContents),
-	}}
-
 	// determine if a rename is needed based on the new file package.
 	// edits will be empty if no file rename is needed.
 	additionalRenameEdits, err := l.fixRenameParams("Template new Rego file", job.URI)
@@ -934,6 +992,10 @@ func (l *LanguageServer) processTemplateJob(ctx context.Context, job lintFileJob
 	}
 
 	// combine content edits with any additional rename edits
+	edits := append(make([]any, 0, 1+len(additionalRenameEdits.Edit.DocumentChanges)), types.TextDocumentEdit{
+		TextDocument: types.OptionalVersionedTextDocumentIdentifier{URI: job.URI},
+		Edits:        ComputeEdits("", newContents),
+	})
 	edits = append(edits, additionalRenameEdits.Edit.DocumentChanges...)
 
 	// send the edit back to the editor so it appears in the open buffer.
@@ -1460,12 +1522,11 @@ func (l *LanguageServer) handleTextDocumentDefinition(params types.DefinitionPar
 }
 
 func (l *LanguageServer) handleTextDocumentDidOpen(
-	ctx context.Context,
 	params types.DidOpenTextDocumentParams,
 ) (any, error) {
 	// then we have started the server, and not yet received a suitable root to use.
 	if l.workspaceRootURI == "" {
-		err := l.updateRootURI(ctx,
+		err := l.updateRootURI(
 			// get the URI of the file's immediate parent
 			l.fromPath(filepath.Dir(uri.ToPath(params.TextDocument.URI))),
 		)
@@ -1721,27 +1782,6 @@ func (l *LanguageServer) handleTextDocumentFormatting(
 	return ComputeEdits(oldContent, newContent), nil
 }
 
-func (l *LanguageServer) handleTextDocumentSemanticTokensFull(
-	ctx context.Context,
-	params types.SemanticTokensParams,
-) (any, error) {
-	if l.ignoreURI(params.TextDocument.URI) {
-		return noTokenRequests, nil
-	}
-
-	module, ok := l.cache.GetModule(params.TextDocument.URI)
-	if !ok {
-		return noTokenRequests, nil
-	}
-
-	result, err := semantictokens.Full(ctx, module)
-	if err != nil {
-		return noTokenRequests, fmt.Errorf("error running semantic token request %w", err)
-	}
-
-	return result, nil
-}
-
 func (l *LanguageServer) handleWorkspaceDidCreateFiles(params types.CreateFilesParams) (any, error) {
 	if l.ignoreURI(params.Files[0].URI) {
 		return emptyStruct, nil
@@ -1871,10 +1911,31 @@ func (l *LanguageServer) handleInitialize(ctx context.Context, params types.Init
 		)
 	}
 
-	l.webServer.SetClient(l.client.Identifier)
-
 	regoFilter := types.FileOperationFilter{Scheme: "file", Pattern: types.FileOperationPattern{Glob: "**/*.rego"}}
 	fileOpOpts := types.FileOperationRegistrationOptions{Filters: []types.FileOperationFilter{regoFilter}}
+
+	// set enabled commands based on server feature flags
+	enabledCommands := []string{
+		"regal.eval",
+		"regal.fix.opa-fmt",
+		"regal.fix.use-rego-v1",
+		"regal.fix.use-assignment-operator",
+		"regal.fix.no-whitespace-comment",
+		"regal.fix.directory-package-mismatch",
+		"regal.fix.non-raw-regex-pattern",
+		"regal.fix.prefer-equals-comparison",
+		"regal.fix.constant-condition",
+		"regal.fix.redundant-existence-check",
+		"regal.config.disable-rule",
+	}
+
+	if l.featureFlags.DebugProvider {
+		enabledCommands = append(enabledCommands, "regal.debug")
+	}
+
+	if l.featureFlags.ExplorerProvider {
+		enabledCommands = append(enabledCommands, "regal.explorer")
+	}
 
 	initializeResult := types.InitializeResult{
 		Capabilities: types.ServerCapabilities{
@@ -1914,22 +1975,9 @@ func (l *LanguageServer) handleInitialize(ctx context.Context, params types.Init
 			SignatureHelpProvider: types.SignatureHelpOptions{
 				TriggerCharacters: []string{"(", ","},
 			},
-			CodeActionProvider: types.CodeActionOptions{CodeActionKinds: []string{"quickfix", "source.explore"}},
+			CodeActionProvider: types.CodeActionOptions{CodeActionKinds: []string{"quickfix", "source"}},
 			ExecuteCommandProvider: types.ExecuteCommandOptions{
-				Commands: []string{
-					"regal.debug",
-					"regal.eval",
-					"regal.fix.opa-fmt",
-					"regal.fix.use-rego-v1",
-					"regal.fix.use-assignment-operator",
-					"regal.fix.no-whitespace-comment",
-					"regal.fix.directory-package-mismatch",
-					"regal.fix.non-raw-regex-pattern",
-					"regal.fix.prefer-equals-comparison",
-					"regal.fix.constant-condition",
-					"regal.fix.redundant-existence-check",
-					"regal.config.disable-rule",
-				},
+				Commands: enabledCommands,
 			},
 			DocumentFormattingProvider: true,
 			FoldingRangeProvider:       true,
@@ -1955,6 +2003,7 @@ func (l *LanguageServer) handleInitialize(ctx context.Context, params types.Init
 					TokenTypes: []string{
 						"namespace",
 						"variable",
+						"namespace",
 					},
 					TokenModifiers: []string{
 						"declaration",
@@ -1962,6 +2011,15 @@ func (l *LanguageServer) handleInitialize(ctx context.Context, params types.Init
 					},
 				},
 				Full: true,
+			},
+			// 'Experimental' is LSP terminology, we are using these to be
+			// 'custom' additions that are ready for use, but not in the base
+			// spec.
+			Experimental: &types.ExperimentalCapabilities{
+				ExplorerProvider:   l.featureFlags.ExplorerProvider,
+				InlineEvalProvider: l.featureFlags.InlineEvaluationProvider,
+				DebugProvider:      l.featureFlags.DebugProvider,
+				OPATestProvider:    l.featureFlags.OPATestProvider,
 			},
 		},
 	}
@@ -1977,7 +2035,7 @@ func (l *LanguageServer) handleInitialize(ctx context.Context, params types.Init
 	}
 
 	if params.RootURI != "" {
-		err := l.updateRootURI(ctx, params.RootURI)
+		err := l.updateRootURI(params.RootURI)
 		if err != nil {
 			l.log.Message("failed to set rootURI: %w", err)
 		}
@@ -1987,7 +2045,7 @@ func (l *LanguageServer) handleInitialize(ctx context.Context, params types.Init
 			l.log.Message("cannot operate with more than one workspace folder, using: %s", (*params.WorkspaceFolders)[0].URI)
 		}
 
-		err := l.updateRootURI(ctx, (*params.WorkspaceFolders)[0].URI)
+		err := l.updateRootURI((*params.WorkspaceFolders)[0].URI)
 		if err != nil {
 			l.log.Message("failed to set rootURI to workspace folder: %w", err)
 		}
@@ -1996,7 +2054,7 @@ func (l *LanguageServer) handleInitialize(ctx context.Context, params types.Init
 	return initializeResult, nil
 }
 
-func (l *LanguageServer) updateRootURI(ctx context.Context, rootURI string) error {
+func (l *LanguageServer) updateRootURI(rootURI string) error {
 	// rootURI not expected to have a trailing slash, remove if present for
 	// consistency
 	normalizedRootURI := strings.TrimSuffix(rootURI, string(os.PathSeparator))
@@ -2048,21 +2106,6 @@ func (l *LanguageServer) updateRootURI(ctx context.Context, rootURI string) erro
 		l.log.Message("no config file found for workspace")
 	}
 
-	_, failed, err := l.loadWorkspaceContents(ctx, false)
-	for _, f := range failed {
-		l.log.Message("failed to load file %s: %s", f.URI, f.Error)
-	}
-
-	if err != nil {
-		l.log.Message("failed to load workspace contents: %s", err)
-	}
-
-	l.webServer.SetWorkspaceURI(l.workspaceRootURI)
-
-	// 'OverwriteAggregates' is set to populate the cache's initial aggregate state.
-	// Subsequent runs of lintWorkspaceJobs will not set this and use the cached state.
-	l.lintWorkspaceJobs <- lintWorkspaceJob{Reason: "server initialize", OverwriteAggregates: true}
-
 	return nil
 }
 
@@ -2099,10 +2142,23 @@ func (l *LanguageServer) loadWorkspaceContents(ctx context.Context, newOnly bool
 			return nil
 		}
 
-		if _, err = updateParse(ctx, l.parseOpts(fileURI, l.builtinsForCurrentCapabilities())); err != nil {
+		parseSuccess, err := updateParse(ctx, l.parseOpts(fileURI, l.builtinsForCurrentCapabilities()))
+		if err != nil {
 			failed = append(failed, fileLoadFailure{URI: fileURI, Error: fmt.Errorf("failed to update parse: %w", err)})
 
 			return nil // continue processing other files
+		}
+
+		if l.client.SupportsOPATestProvider() {
+			if parseSuccess {
+				l.testLocationJobs <- lintFileJob{Reason: "server initialized", URI: fileURI}
+			} else {
+				// this is covering the case where the client starts and the state
+				// is different (the client remembers test locations and state).
+				if err := l.sendTestLocations(ctx, fileURI, []any{}); err != nil {
+					l.log.Message("failed to send empty test locations after parse failure: %s", err)
+				}
+			}
 		}
 
 		changedOrNewURIs = append(changedOrNewURIs, fileURI)
@@ -2121,12 +2177,33 @@ func (l *LanguageServer) loadWorkspaceContents(ctx context.Context, newOnly bool
 	return changedOrNewURIs, failed, nil
 }
 
-func (l *LanguageServer) handleInitialized() (any, error) {
-	// if running without config, then we should send the diagnostic request now
-	// otherwise it'll happen when the config is loaded
-	if !l.configWatcher.IsWatching() {
-		l.lintWorkspaceJobs <- lintWorkspaceJob{Reason: "server initialized"}
-	}
+func (l *LanguageServer) handleInitialized(ctx context.Context) (any, error) {
+	// Signal workers that initialization handshake is complete
+	close(l.initializationGate)
+
+	// Load workspace contents and start jobs asynchronously
+	// This allows us to respond to the client immediately while workspace
+	// loading happens in the background
+	go func() {
+		_, failed, err := l.loadWorkspaceContents(ctx, false)
+		for _, f := range failed {
+			l.log.Message("failed to load file %s: %s", f.URI, f.Error)
+		}
+
+		if err != nil {
+			l.log.Message("failed to load workspace contents: %s", err)
+		}
+
+		// 'OverwriteAggregates' is set to populate the cache's initial aggregate state.
+		// Subsequent runs of lintWorkspaceJobs will not set this and use the cached state.
+		l.lintWorkspaceJobs <- lintWorkspaceJob{Reason: "server initialize", OverwriteAggregates: true}
+
+		// if running without config, then we should send the diagnostic request now
+		// otherwise it'll happen when the config is loaded
+		if !l.configWatcher.IsWatching() {
+			l.lintWorkspaceJobs <- lintWorkspaceJob{Reason: "server initialized"}
+		}
+	}()
 
 	return emptyStruct, nil
 }
@@ -2170,6 +2247,12 @@ func (l *LanguageServer) handleWorkspaceDidChangeWatchedFiles(
 }
 
 func (l *LanguageServer) sendFileDiagnostics(ctx context.Context, fileURI string) {
+	if l.conn == nil {
+		l.log.Debug("sendFileDiagnostics called with no connection: %s", fileURI)
+
+		return
+	}
+
 	// first, set the diagnostics for the file to the current parse errors
 	fileDiags, _ := l.cache.GetParseErrors(fileURI)
 	if len(fileDiags) == 0 {
@@ -2268,6 +2351,9 @@ func (l *LanguageServer) parseOpts(fileURI string, bis map[string]*ast.Builtin) 
 func (l *LanguageServer) regalContext(fileURI string, _ *rego.Requirements) *rego.RegalContext {
 	return &rego.RegalContext{
 		Client: l.client,
+		Server: types.ServerContext{
+			FeatureFlags: l.featureFlags,
+		},
 		File: rego.File{
 			Name:        l.toRelativePath(fileURI),
 			RegoVersion: l.regoVersionForURI(fileURI).String(),
@@ -2281,6 +2367,180 @@ func (l *LanguageServer) regalContext(fileURI string, _ *rego.Requirements) *reg
 			WorkspaceRootPath: l.workspacePath(),
 		},
 	}
+}
+
+func (l *LanguageServer) handleExplorerCommand(ctx context.Context, params types.ExecuteCommandParams) error {
+	if !l.client.SupportsExplorer() {
+		l.log.Message("regal.explorer command called but client does not support explorer functionality")
+
+		return errors.New("client does not support explorer functionality")
+	}
+
+	var args types.ExplorerCommandArgs
+
+	if len(params.Arguments) > 0 {
+		arg, ok := params.Arguments[0].(map[string]any)
+		if !ok {
+			l.log.Message(
+				"failed to unmarshal regal.explorer command arguments, expected object, got %T",
+				params.Arguments[0],
+			)
+
+			return errors.New("failed to parse explorer arguments")
+		}
+
+		args = types.ExplorerCommandArgs{
+			Target:      util.GetMapValue[string](arg, "target"),
+			Strict:      util.GetMapValue[bool](arg, "strict"),
+			Annotations: util.GetMapValue[bool](arg, "annotations"),
+			Print:       util.GetMapValue[bool](arg, "print"),
+			Format:      util.GetMapValue[bool](arg, "format"),
+		}
+	}
+
+	if args.Target == "" {
+		l.log.Message("expected command target, got empty string")
+
+		return errors.New("target file URI is required")
+	}
+
+	contents, ok := l.cache.GetFileContents(args.Target)
+	if !ok {
+		return fmt.Errorf("could not get file contents for uri %q", args.Target)
+	}
+
+	path := l.toRelativePath(args.Target)
+
+	compileResults := explorer.CompilerStages(
+		path,
+		contents,
+		args.Strict,
+		args.Annotations,
+		args.Print,
+	)
+
+	// For VSCode, use the notification approach
+	if l.client.Identifier == clients.IdentifierVSCode {
+		stages := make([]types.ExplorerStageResult, 0, len(compileResults))
+		hasErrors := false
+
+		for _, cs := range compileResults {
+			stage := types.ExplorerStageResult{
+				Name:  string(cs.Stage),
+				Error: cs.Error != "",
+			}
+
+			if cs.Error != "" {
+				hasErrors = true
+				stage.Output = cs.Error
+			} else {
+				if args.Format {
+					stage.Output = cs.FormattedResult()
+				} else if cs.Result != nil {
+					stage.Output = cs.Result.String()
+				}
+			}
+
+			stages = append(stages, stage)
+		}
+
+		responseParams := types.ExplorerResult{
+			Stages: stages,
+		}
+
+		if !hasErrors {
+			if plan, err := explorer.Plan(ctx, path, contents, args.Print); err == nil {
+				responseParams.Plan = plan
+			}
+		}
+
+		if err := l.conn.Notify(ctx, "regal/showExplorerResult", responseParams); err != nil {
+			return fmt.Errorf("regal/showExplorerResult notification failed: %w", err)
+		}
+
+		return nil
+	}
+
+	// For other LSP clients, write stages to temp files and use window/showDocument
+	tmpDir, err := os.MkdirTemp("", "regal-explorer-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temporary directory: %w", err)
+	}
+
+	hasErrors := false
+	baseName := filepath.Base(uri.ToPath(args.Target))
+	baseName = strings.TrimSuffix(baseName, ".rego")
+
+	var previousOutput string
+
+	filesToOpen := make([]string, 0)
+
+	for i, cs := range compileResults {
+		var output string
+
+		if cs.Error != "" {
+			hasErrors = true
+			output = cs.Error
+		} else if cs.Result != nil {
+			if args.Format {
+				output = cs.FormattedResult()
+			} else {
+				output = cs.Result.String()
+			}
+		}
+
+		if output == "" {
+			continue
+		}
+
+		stageName := strings.ReplaceAll(string(cs.Stage), " ", "_")
+		filename := filepath.Join(tmpDir, fmt.Sprintf("%02d_%s_%s.txt", i, baseName, stageName))
+
+		if err := os.WriteFile(filename, []byte(output), 0o600); err != nil {
+			l.log.Message("failed to write stage file %s: %s", filename, err)
+
+			continue
+		}
+
+		// Only open stages where output differs from previous stage
+		if output != previousOutput {
+			filesToOpen = append(filesToOpen, filename)
+			previousOutput = output
+		}
+	}
+
+	for _, filename := range filesToOpen {
+		showParams := types.ShowDocumentParams{
+			URI:       uri.FromPath(l.client.Identifier, filename),
+			TakeFocus: new(false),
+		}
+
+		var result types.ShowDocumentResult
+		if err := l.conn.Call(ctx, "window/showDocument", showParams, &result); err != nil {
+			l.log.Message("window/showDocument failed for %s: %s", filename, err)
+		}
+	}
+
+	if !hasErrors {
+		if plan, err := explorer.Plan(ctx, path, contents, args.Print); err == nil && plan != "" {
+			planFile := filepath.Join(tmpDir, fmt.Sprintf("%02d_%s_Plan.txt", len(compileResults), baseName))
+			if err := os.WriteFile(planFile, []byte(plan), 0o600); err != nil {
+				l.log.Message("failed to write plan file: %s", err)
+			} else {
+				showParams := types.ShowDocumentParams{
+					URI:       uri.FromPath(l.client.Identifier, planFile),
+					TakeFocus: new(false),
+				}
+
+				var result types.ShowDocumentResult
+				if err := l.conn.Call(ctx, "window/showDocument", showParams, &result); err != nil {
+					l.log.Message("window/showDocument failed for plan: %s", err)
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 func (l *LanguageServer) handleEvalCommand(ctx context.Context, args types.CommandArgs) error {
@@ -2351,8 +2611,7 @@ func (l *LanguageServer) handleEvalCommand(ctx context.Context, args types.Comma
 		target = strings.TrimPrefix(args.Query, module.Package.Path.String()+".")
 	}
 
-	if l.client.InitOptions.EvalCodelensDisplayInline != nil &&
-		*l.client.InitOptions.EvalCodelensDisplayInline {
+	if l.featureFlags.InlineEvaluationProvider && l.client.SupportsEvalCodelensDisplayInline() {
 		responseParams := map[string]any{
 			"result": result,
 			"line":   args.Row,

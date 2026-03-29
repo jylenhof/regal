@@ -19,47 +19,6 @@ _find_assign_vars(value) := [value] if {
 	value.type in {"array", "object"}
 }
 
-# var declared via `some`, i.e. `some x` or `some x, y`
-_find_some_decl_vars(value) := [v |
-	some v in value
-	v.type == "var"
-]
-
-# single var declared via `some in`, i.e. `some x in y`
-_find_some_in_decl_vars(arr) := _find_nested_vars(arr[1]) if count(arr) == 3
-
-# two vars declared via `some in`, i.e. `some x, y in z`
-_find_some_in_decl_vars(arr) := vars if {
-	count(arr) == 4
-
-	vars := [v |
-		some i in [1, 2]
-		some v in _find_nested_vars(arr[i])
-	]
-}
-
-# METADATA
-# description: |
-#   find vars like input[x].foo[y] where x and y are vars
-#   note: value.type == "ref" check must have been done before calling this function
-find_ref_vars(value) := [var | # regal ignore:narrow-argument
-	some i, var in value.value
-
-	i > 0
-	var.type == "var"
-]
-
-# one or two vars declared via `every`, i.e. `every x in y {}`
-# or `every`, i.e. `every x, y in z {}`
-_find_every_vars(value) := [var |
-	some kind in ["key", "value"]
-
-	var := value[kind]
-
-	var.type == "var"
-	indexof(var.value, "$") == -1
-]
-
 # METADATA
 # description: |
 #   true if a var of 'name' can be found in the provided AST node
@@ -95,82 +54,11 @@ has_term_var(terms) if {
 	term.type == "var"
 }
 
-_find_vars(value, last) := {"term": find_term_vars(function_ret_args(fn_name, value))} if {
-	last == "terms"
-	value[0].type == "ref"
-	value[0].value[0].type == "var"
-	value[0].value[0].value != "assign"
-
-	fn_name := ref_static_to_string(value[0].value)
-
-	function_ret_in_args(all_function_names[fn_name], value)
-}
-
-# `=` isn't necessarily assignment, and only considering the variable on the
-# left-hand side is equally dubious, but we'll treat `x = 1` as `x := 1` for
-# the purpose of this function until we have a more robust way of dealing with
-# unification
-_find_vars(value, last) := {"assign": _find_assign_vars(value[1])} if {
-	last == "terms"
-	value[0].type == "ref"
-	value[0].value[0].type == "var"
-	value[0].value[0].value in {"assign", "eq"}
-}
-
-_find_vars(value, last) := {"somein": _find_some_in_decl_vars(value[0].value)} if {
-	last == "symbols"
-	value[0].type == "call"
-}
-
-_find_vars(value, last) := {"some": _find_some_decl_vars(value)} if {
-	last == "symbols"
-	value[0].type != "call"
-}
-
-_find_vars(value, last) := {"every": _find_every_vars(value)} if {
-	last == "terms"
-	value.domain
-}
-
-_find_vars(value, last) := {"args": arg_vars} if {
-	last == "args"
-
-	arg_vars := [arg |
-		some arg in value
-		arg.type == "var"
-	]
-
-	count(arg_vars) > 0
-}
-
 # converting to string until https://github.com/open-policy-agent/opa/issues/6736 is fixed
 _rule_index(rule) := rule_index_strings[i] if {
-	some i, r in _rules
-	r == rule
+	some i
+	rule == _rules[i]
 }
-
-# METADATA
-# description: |
-#   traverses all nodes under provided node (using `walk`), and returns an array with
-#   all variables declared via assignment (:=), `some`, `every` and in comprehensions
-#   DEPRECATED: uses ast.found.vars instead
-find_vars(node) := array.concat(
-	[var |
-		walk(node, [path, value])
-
-		last := {"terms", "symbols", "args"}[regal.last(path)]
-		var := _find_vars(value, last)[_][_]
-	],
-	[var |
-		walk(node, [_, value])
-
-		value.type == "ref"
-
-		some x, var in value.value
-		x > 0
-		var.type == "var"
-	],
-)
 
 # hack to work around the different input models of linting vs. the lsp package.. we
 # should probably consider something more robust
@@ -195,60 +83,15 @@ _rules := data.workspace.parsed[object.get(input, ["params", "textDocument", "ur
 #   - somein
 #   - ref
 # scope: document
-found.vars[rule_index][context] contains var if {
-	some i, rule_index in rule_index_strings
-	some expr in _rules[i].body
+found.vars[rule_index].every contains term if {
+	some rule_index, i
+	found.expressions[rule_index][i].terms.domain
 
-	some context, vars in _find_vars(expr.terms, "terms")
-	some var in vars
-}
+	some kind in ["key", "value"]
+	term := found.expressions[rule_index][i].terms[kind]
 
-found.vars[rule_index][context] contains var if {
-	some i, rule_index in rule_index_strings
-	some expr in _rules[i].body
-
-	walk(expr.terms, [_, value])
-
-	some context, vars in _find_vars(value.terms, "terms")
-	some var in vars
-}
-
-found.vars[rule_index][context] contains var if {
-	some i, rule_index in rule_index_strings
-	some expr in _rules[i].body
-
-	walk(expr.terms, [_, value])
-
-	some context, vars in _find_vars(value.symbols, "symbols")
-	some var in vars
-}
-
-found.vars[rule_index][context] contains var if {
-	some i, rule_index in rule_index_strings
-	rule := _rules[i].else
-	some node in ["head", "body", "else"]
-
-	walk(rule[node], [path, value])
-
-	last := {"terms", "symbols"}[regal.last(path)]
-
-	some context, vars in _find_vars(value, last)
-	some var in vars
-}
-
-found.vars[rule_index][context] contains var if {
-	some i, rule_index in rule_index_strings
-	head := _rules[i].head
-
-	some node in ["key", "value"]
-	not head[node].type in {"string", "number", "boolean", "null", "var"}
-
-	walk(head[node].value, [path, value])
-
-	last := {"terms", "symbols"}[regal.last(path)]
-
-	some context, vars in _find_vars(value, last)
-	some var in vars
+	term.type == "var"
+	indexof(term.value, "$") == -1
 }
 
 found.vars[rule_index].args contains term if {
@@ -258,7 +101,7 @@ found.vars[rule_index].args contains term if {
 	term.type == "var"
 }
 
-found.vars[rule_index].args contains value if {
+found.vars[rule_index].args contains node if {
 	some i, rule_index in rule_index_strings
 	some term in _rules[i].head.args
 
@@ -267,17 +110,74 @@ found.vars[rule_index].args contains value if {
 	some item in term.value
 	not item.type in {"string", "number", "boolean", "null"}
 
-	walk(item, [_, value])
+	walk(item, [_, node])
 
-	value.type == "var"
+	node.type == "var"
 }
 
 found.vars[rule_index].ref contains term if {
-	some rule_index in rule_index_strings
-	some ref in found.refs[rule_index]
-	some x, term in ref.value
+	some rule_index, ref
+	found.refs[rule_index][ref]
 
-	x > 0
+	some i, term in ref.value
+
+	i > 0
+	term.type == "var"
+}
+
+# find "return value vars", i.e. those placed after a functions declared
+# number of args, e.g `x` in `count(x, y)`
+found.vars[rule_index].term contains var if {
+	some rule_index, calls in found.calls
+	some call in calls
+
+	call[0].value[0].type == "var"
+	call[0].value[0].value != "assign"
+
+	fn_name := ref_static_to_string(call[0].value)
+	undeclared_start := count(all_functions[fn_name].decl.args) + 1
+
+	call[undeclared_start]
+	fn_name != "print"
+
+	some var in find_term_vars(array.slice(call, undeclared_start, 100))
+}
+
+# `=` isn't necessarily assignment, and only considering the variable on the
+# left-hand side is equally dubious, but we'll treat `x = 1` as `x := 1` for
+# the purpose of this function until we have a more robust way of dealing with
+# unification
+found.vars[rule_index].assign contains var if {
+	some rule_index, calls in found.calls
+	some call in calls
+
+	call[0].value[0].type == "var"
+	call[0].value[0].value in {"assign", "eq"}
+
+	some var in _find_assign_vars(call[1])
+}
+
+found.vars[rule_index].somein contains var if {
+	some rule_index, symbols in found.symbols
+	some value in symbols
+
+	value[0].type == "call"
+
+	arr := value[0].value
+
+	some var in array.flatten([_find_nested_vars(arr[1]), [var |
+		count(arr) == 4
+		some var in _find_nested_vars(arr[2])
+	]])
+}
+
+found.vars[rule_index].some contains term if {
+	some rule_index, symbols in found.symbols
+	some value in symbols
+
+	value[0].type != "call"
+
+	some term in value
 	term.type == "var"
 }
 
@@ -307,6 +207,15 @@ found.symbols[rule_index] contains value.symbols if {
 	some i, rule_index in rule_index_strings
 
 	walk(_rules[i], [_, value])
+}
+
+# METADATA
+# description: all every constructs found in module
+found.every[rule_index] contains terms if {
+	some rule_index, i
+	found.expressions[rule_index][i].terms.domain
+
+	terms := found.expressions[rule_index][i].terms
 }
 
 # METADATA

@@ -6,17 +6,15 @@ import data.regal.config
 import data.regal.result
 
 report contains violation if {
-	some rule in input.rules
+	head := input.rules[_].head
+	term := head.value
 
-	rhv := rule.head.value
+	term.type == "call"
+	term.value[0].type == "ref"
 
-	rhv.type == "call"
-	rhv.value[0].type == "ref"
-	rhv.value[0].value[0].type == "var"
-
-	ref_name := rhv.value[0].value[0].value
+	ref_name := term.value[0].value[0].value
 
 	config.capabilities.builtins[ref_name].decl.result == "boolean"
 
-	violation := result.fail(rego.metadata.chain(), result.location(rule.head))
+	violation := result.fail(rego.metadata.chain(), result.location(head))
 }

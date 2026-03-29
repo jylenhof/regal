@@ -1,36 +1,47 @@
 package embedded
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/open-policy-agent/regal/internal/test/assert"
+	"github.com/open-policy-agent/regal/internal/test/must"
+)
 
 func TestEmbeddedEOPA(t *testing.T) {
 	t.Parallel()
 
-	// As of 2024-08-27, there are 47 capabilities files in the EOPA repo.
-	// It follows that there should never be less than 47 valid
-	// capabilities in the embedded database. This is really just a sanity
-	// check to ensure the JSON files didn't get misplaced or something to
-	// that effect.
-	//
-	// This also ensures that all of the embedded capabilities files are
-	// valid JSON we can successfully marshal into *ast.Capabilities.
+	// Ensure >= 47 embedded capabilities, and that they unmarshal to *ast.Capabilities
+	versions := must.Return(LoadCapabilitiesVersions("eopa"))(t)
+	assert.True(t, len(versions) >= 47, "minimum number of built-ins")
 
-	versions, err := LoadCapabilitiesVersions("eopa")
+	for _, v := range versions {
+		caps := must.Return(LoadCapabilitiesVersion("eopa", v))(t)
+		assert.True(t, len(caps.Builtins) > 0, "eopa capabilities contains built-ins", v)
+	}
+}
+
+func TestEmbeddedRq(t *testing.T) {
+	t.Parallel()
+
+	// As of 2026-02-15, there should be at least 8 rq capabilities files.
+
+	versions, err := LoadCapabilitiesVersions("rq")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if len(versions) < 47 {
-		t.Errorf("Expected at least 47 EOPA capabilities in the embedded database (got %d)", len(versions))
+	if len(versions) < 8 {
+		t.Errorf("Expected at least 8 rq capabilities in the embedded database (got %d)", len(versions))
 	}
 
 	for _, v := range versions {
-		caps, err := LoadCapabilitiesVersion("eopa", v)
+		caps, err := LoadCapabilitiesVersion("rq", v)
 		if err != nil {
-			t.Errorf("error with eopa capabilities version %s: %v", v, err)
+			t.Errorf("error with rq capabilities version %s: %v", v, err)
 		}
 
 		if len(caps.Builtins) < 1 {
-			t.Errorf("eopa capabilities version %s has no builtins", v)
+			t.Errorf("rq capabilities version %s has no builtins", v)
 		}
 	}
 }

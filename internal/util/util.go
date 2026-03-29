@@ -156,6 +156,24 @@ func SafeUintToInt(u uint) int {
 	return int(u)
 }
 
+// SafeIntToUint will convert an int to a uint, clamping negative values to 0.
+func SafeIntToUint(i int) uint {
+	if i < 0 {
+		return 0 // Clamp negative values to 0
+	}
+
+	return uint(i)
+}
+
+// BoolToInt is a silly little helper to help with pre-allocation.
+func BoolToInt(b bool) int {
+	if b {
+		return 1
+	}
+
+	return 0
+}
+
 // EnsureSuffix ensures that the given string ends with the specified suffix.
 // If the string already ends with suf, it is returned unchanged.
 // Note that an empty string s is returned unchanged — *not* turned into "/".
@@ -192,15 +210,6 @@ func Partial2[T, U, R any](f func(a T, b U) R, a T) func(U) R {
 // EqualsAny checks if the provided value is equal to any of the values in the slice.
 func EqualsAny[T comparable](a ...T) func(T) bool {
 	return Partial2(slices.Contains, a)
-}
-
-// SafeIntToUint will convert an int to a uint, clamping negative values to 0.
-func SafeIntToUint(i int) uint {
-	if i < 0 {
-		return 0 // Clamp negative values to 0
-	}
-
-	return uint(i)
 }
 
 // FreePort returns a free port to listen on, if none of the preferred ports
@@ -265,9 +274,18 @@ func SendToAll[T any](val T, ch ...chan T) {
 	}
 }
 
-// Pointer returns a pointer to the provided value.
-func Pointer[T any](v T) *T {
-	return &v
+// GetMapValue extracts a typed value from a map[string]any, returning the value if the type matched,
+// or the zero values of correct type.
+func GetMapValue[T any](m map[string]any, key string) T {
+	if val, ok := m[key]; ok {
+		if typed, ok := val.(T); ok {
+			return typed
+		}
+	}
+
+	var zero T
+
+	return zero
 }
 
 // AnySliceTo converts a slice of any to a slice of T, returning an error if any element cannot be casted.
@@ -275,12 +293,12 @@ func AnySliceTo[T any](in []any) ([]T, error) {
 	out := make([]T, 0, len(in))
 
 	for _, item := range in {
-		casted, ok := item.(T)
+		asserted, ok := item.(T)
 		if !ok {
-			return nil, fmt.Errorf("expected %T, got %T", casted, item)
+			return nil, fmt.Errorf("expected %T, got %T", asserted, item)
 		}
 
-		out = append(out, casted)
+		out = append(out, asserted)
 	}
 
 	return out, nil

@@ -192,7 +192,7 @@ func ValuesOfType[T ast.Value](terms []*ast.Term) iter.Seq[T] {
 func StructToValue(input any) ast.Value {
 	v, t := reflect.ValueOf(input), reflect.TypeOf(input)
 
-	if v.Kind() == reflect.Ptr {
+	if v.Kind() == reflect.Pointer {
 		v, t = v.Elem(), t.Elem()
 	}
 
@@ -206,16 +206,21 @@ func StructToValue(input any) ast.Value {
 
 		value := v.Field(i)
 
-		if strings.Contains(tag, ",") {
-			parts := strings.Split(tag, ",")
-			tag = parts[0]
+		if comma := strings.Index(tag, ","); comma != -1 {
+			rest := tag[comma+1:]
+			tag = tag[:comma]
 
-			if slices.Contains(parts[1:], "omitempty") && value.IsZero() {
+			if strings.Contains(rest, "omitempty") && value.IsZero() {
 				continue
 			}
 		}
 
-		kvs = append(kvs, ast.Item(ast.InternedTerm(tag), ast.NewTerm(toAstValue(value.Interface()))))
+		iface := value.Interface()
+		if vi, ok := iface.(*ast.Term); ok {
+			kvs = append(kvs, ast.Item(ast.InternedTerm(tag), vi))
+		} else {
+			kvs = append(kvs, ast.Item(ast.InternedTerm(tag), ast.NewTerm(toAstValue(iface))))
+		}
 	}
 
 	return ast.NewObject(kvs...)
@@ -226,8 +231,12 @@ func toAstValue(v any) ast.Value {
 		return ast.NullValue
 	}
 
+	if av, ok := v.(ast.Value); ok {
+		return av
+	}
+
 	rv := reflect.ValueOf(v)
-	for rv.Kind() == reflect.Ptr {
+	for rv.Kind() == reflect.Pointer {
 		if rv.IsNil() {
 			return ast.NullValue
 		}

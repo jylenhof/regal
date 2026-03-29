@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/open-policy-agent/regal/bundle"
+	"github.com/open-policy-agent/regal/internal/test/must"
 	"github.com/open-policy-agent/regal/internal/testutil"
 	"github.com/open-policy-agent/regal/pkg/config"
 	"github.com/open-policy-agent/regal/pkg/report"
@@ -12,8 +13,15 @@ import (
 
 // 736486708 ns/op	2348230496 B/op	51198148 allocs/op // OPA v1.12.2
 // 563373188 ns/op	1962281168 B/op	46929220 allocs/op // AST aggregates refactor
+// 461607500 ns/op	1543793525 B/op	36938279 allocs/op // Performance refactor + follow-up
 func BenchmarkRegalLintingItself(b *testing.B) {
-	benchmarkLint(b, bundleLinter(b, true))
+	for b.Loop() {
+		linter := NewLinter().
+			WithInputPaths([]string{"../../bundle"}).
+			WithUserConfig(must.Return(config.FromPath(filepath.Join("..", "..", ".regal", "config.yaml")))(b))
+
+		testutil.AssertNumViolations(b, 0, must.Return(linter.Lint(b.Context()))(b))
+	}
 }
 
 // 694275500 ns/op	2568604236 B/op	52506343 allocs/op // OPA v1.10.0
@@ -21,12 +29,17 @@ func BenchmarkRegalLintingItself(b *testing.B) {
 // 497374153 ns/op	1923188613 B/op	45981278 allocs/op // AST aggregates refactor
 // 486491514 ns/op	1906786789 B/op	45640947 allocs/op // OPA v1.13.1 + fixes
 // 420959403 ns/op	1534395760 B/op	36917131 allocs/op // Performance refactor
+// 403029542 ns/op	1494994832 B/op	35884349 allocs/op // Performance refactor follow-up
+// 403083139 ns/op	1520423272 B/op	36511766 allocs/op // 3 new rules added
+//
+// 339462153 ns/op	1128242546 B/op	32027363 allocs/op // opa main
 func BenchmarkRegalLintingItselfPrepareOnce(b *testing.B) {
 	benchmarkLint(b, bundleLinter(b, true).MustPrepare(b.Context()))
 }
 
 // 65815866 ns/op   43852693 B/op    1025467 allocs/op // OPA v1.10.0
 // 64977849 ns/op   38570571 B/op     932404 allocs/op // OPA v1.12.2
+// 61936272 ns/op	38191932 B/op	  921084 allocs/op // OPA v1.13.1
 func BenchmarkOnlyPrepare(b *testing.B) {
 	linter := bundleLinter(b, true)
 	for b.Loop() {
@@ -52,7 +65,7 @@ func BenchmarkRegalNoEnabledRulesPrepareOnce(b *testing.B) {
 // meaning you do NOT want to do this more than occasionally. You may however find it helpful to use this with
 // a single, or handful of rules to get a better idea of how long they take to run, and relative to each other.
 func BenchmarkEachRule(b *testing.B) {
-	config := testutil.Must(config.WithDefaultsFromBundle(bundle.Loaded(), nil))(b)
+	config := must.Return(config.WithDefaultsFromBundle(bundle.Loaded(), nil))(b)
 	linter := bundleLinter(b, false).WithDisableAll(true).MustPrepare(b.Context())
 
 	for _, category := range config.Rules {
@@ -75,7 +88,7 @@ func bundleLinter(b *testing.B, withConfig bool) Linter {
 	linter := NewLinter().WithInputPaths([]string{"../../bundle"})
 
 	if withConfig {
-		config := testutil.Must(config.FromPath(filepath.Join("..", "..", ".regal", "config.yaml")))(b)
+		config := must.Return(config.FromPath(filepath.Join("..", "..", ".regal", "config.yaml")))(b)
 		linter = linter.WithUserConfig(config)
 	}
 
@@ -87,7 +100,7 @@ func benchmarkLint(b *testing.B, linter Linter) {
 
 	var rep report.Report
 	for b.Loop() {
-		rep = testutil.Must(linter.Lint(b.Context()))(b)
+		rep = must.Return(linter.Lint(b.Context()))(b)
 	}
 
 	testutil.AssertNumViolations(b, 0, rep)

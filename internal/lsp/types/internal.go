@@ -21,7 +21,7 @@ type Ref struct {
 
 // RefKind represents the kind of object that a Ref represents.
 // This is intended to toggle functionality and which UI symbols to use.
-type RefKind int
+type RefKind uint8
 
 const (
 	Package RefKind = iota + 1
@@ -65,4 +65,34 @@ type Client struct {
 
 func NewGenericClient() Client {
 	return Client{Identifier: clients.IdentifierGeneric}
+}
+
+func (c Client) SupportsExplorer() bool {
+	return c.InitOptions != nil &&
+		c.InitOptions.EnableExplorer != nil &&
+		*c.InitOptions.EnableExplorer
+}
+
+func (c Client) SupportsDebugCodeLens() bool {
+	return c.InitOptions != nil &&
+		c.InitOptions.EnableDebugCodelens != nil &&
+		*c.InitOptions.EnableDebugCodelens
+}
+
+func (c Client) SupportsEvalCodelensDisplayInline() bool {
+	return c.InitOptions != nil &&
+		c.InitOptions.EvalCodelensDisplayInline != nil &&
+		*c.InitOptions.EvalCodelensDisplayInline
+}
+
+func (c Client) SupportsOPATestProvider() bool {
+	return c.InitOptions != nil &&
+		c.InitOptions.EnableServerTesting != nil &&
+		*c.InitOptions.EnableServerTesting
+}
+
+// ServerContext is a type which is used to contain things from the server's
+// state that is needed in RegalContext.
+type ServerContext struct {
+	FeatureFlags ServerFeatureFlags `json:"feature_flags"`
 }

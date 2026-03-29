@@ -16,7 +16,7 @@ aggregate contains entry if {
 		_import.path.value[0].value == "data"
 		len := count(_import.path.value)
 		len > 1
-		path := [part.value | some part in array.slice(_import.path.value, 1, len)]
+		path := [term.value | some term in array.slice(_import.path.value, 1, len)]
 
 		# Special case for custom rules, where we don't want to flag e.g. `import data.regal.ast`
 		# as unknown, even though it's not a package included in evaluation.
@@ -52,14 +52,14 @@ aggregate_report contains violation if {
 	not path in all_package_paths
 	not path in _ignored_import_paths
 
-	count([path |
+	[path |
 		some pkg_path in all_package_paths
 		pkg_path == array.slice(path, 0, count(pkg_path))
-	]) > 0
+	] != []
 
 	violation := result.fail(rego.metadata.chain(), {"location": object.union(util.to_location_no_text(location), {
 		"file": file,
-		"text": concat("", ["import data.", concat(".", path)]),
+		"text": $"import data.{concat(".", path)}",
 	})})
 }
 

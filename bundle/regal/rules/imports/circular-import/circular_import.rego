@@ -11,12 +11,12 @@ import data.regal.ast
 import data.regal.result
 import data.regal.util
 
-_refs[ref] contains r.location if {
-	some r
-	ast.found.refs[_][r].value[0].value == "data"
-	ast.static_ref(r)
+_refs[str] contains ref.location if {
+	some ref
+	ast.found.refs[_][ref].value[0].value == "data"
+	ast.static_ref(ref)
 
-	ref := concat(".", [e.value | some e in r.value])
+	str := concat(".", [term.value | some term in ref.value])
 }
 
 _refs[ref] contains imported.path.location if {
@@ -24,12 +24,12 @@ _refs[ref] contains imported.path.location if {
 
 	imported.path.value[0].value == "data"
 
-	ref := concat(".", [e.value | some e in imported.path.value])
+	ref := concat(".", [term.value | some term in imported.path.value])
 }
 
 # METADATA
 # description: collects refs from module, if any
-aggregate contains {"package_name": ast.package_name_full, "refs": _refs} if count(_refs) > 0
+aggregate contains {"package_name": ast.package_name_full, "refs": _refs} if _refs != {}
 
 # METADATA
 # schemas:
@@ -38,16 +38,16 @@ aggregate_report contains violation if {
 	# 2+ files required in the aggregated set for a circular import to be possible
 	count(_aggregated) > 1
 
-	some g in _groups
+	some group in _groups
 
-	count(g) > 1
+	count(group) > 1
 
-	sorted_group := sort(g)
+	sorted_group := sort(group)
 
 	[file, referenced_location] := [file_loc |
-		some m1 in sorted_group
-		some m2 in sorted_group
-		file_loc := _package_locations[m1][m2]
+		some vertices_one in sorted_group
+		some vertices_two in sorted_group
+		file_loc := _package_locations[vertices_one][vertices_two]
 	][0]
 
 	violation := result.fail(rego.metadata.chain(), {
@@ -61,11 +61,13 @@ aggregate_report contains violation if {
 #   - input: schema.regal.aggregate
 aggregate_report contains violation if {
 	# this rule tests for self dependencies
-	some g in _groups
+	some group in _groups
 
-	count(g) == 1
+	count(group) == 1
 
-	some pkg in g # this will be the only package
+	some pkg in group # this will be the only package
+
+	pkg in _import_graph[pkg] # without this, check below is extremely expensive!
 
 	[file, referenced_location] := _package_locations[pkg][pkg]
 
@@ -86,9 +88,9 @@ _package_locations[referenced_pkg][pkg.package_name] := [file, util.any_set_item
 # METADATA
 # schemas:
 #   - input: schema.regal.aggregate
-_import_graph[pkg.package_name] contains edge if {
+_import_graph[pkg.package_name] contains str if {
 	some pkg in _aggregated
-	some edge, _ in pkg.refs
+	some str, _ in pkg.refs
 }
 
 _reachable_index[pkg] := graph.reachable(_import_graph, {pkg}) if some pkg, _ in _import_graph
@@ -100,11 +102,11 @@ _groups contains group if {
 
 	# only consider packages that have edges to other packages,
 	# even if only to themselves
-	count(_import_graph[pkg]) > 0
+	_import_graph[pkg] != {}
 
-	group := {m |
-		some m in graph.reachable(_import_graph, {pkg})
-		pkg in _reachable_index[m]
+	group := {vertices |
+		some vertices in graph.reachable(_import_graph, {pkg})
+		pkg in _reachable_index[vertices]
 	}
 }
 

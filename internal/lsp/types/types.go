@@ -1,9 +1,12 @@
 package types
 
 import (
-	"encoding/json"
+	"strconv"
+
+	outil "github.com/open-policy-agent/opa/v1/util"
 
 	"github.com/open-policy-agent/regal/internal/lsp/types/symbols"
+	"github.com/open-policy-agent/regal/internal/util"
 )
 
 type (
@@ -24,229 +27,36 @@ type (
 	InitializationOptions struct {
 		// Formatter specifies the formatter to use. Options: 'opa fmt' (default),
 		// 'opa fmt --rego-v1' or 'regal fix'.
-		Formatter *string `json:"formatter,omitempty"`
+		Formatter string `json:"formatter,omitempty"`
 		// EnableDebugCodelens, if set, will enable debug codelens
 		// when clients request code lenses for a file.
-		EnableDebugCodelens *bool `json:"enableDebugCodelens,omitempty"`
+		EnableDebugCodelens bool `json:"enableDebugCodelens,omitempty"`
 		// EvalCodelensDisplayInline, if set, will show evaluation results natively
 		// in the calling editor, rather than in an output file.
-		EvalCodelensDisplayInline *bool `json:"evalCodelensDisplayInline,omitempty"`
+		EvalCodelensDisplayInline bool `json:"evalCodelensDisplayInline,omitempty"`
+		// EnableEvalInlineCoverage, if set, will cause a regal.eval command to also
+		// evaluate coverage and include the results in the regal/showEvalResult
+		// notification's "coverage" field.
+		EnableEvalInlineCoverage bool `json:"enableEvalInlineCoverage,omitempty"`
 		// EnableExplorer, if set, will enable the regal.explorer command
 		// and related functionality.
-		EnableExplorer *bool `json:"enableExplorer,omitempty"`
+		EnableExplorer bool `json:"enableExplorer,omitempty"`
 		// EnableServerTesting, if set, will enable test location notifications
 		// via the regal/testLocations and test running handler.
-		EnableServerTesting *bool `json:"enableServerTesting,omitempty"`
+		EnableServerTesting bool `json:"enableServerTesting,omitempty"`
 	}
 
-	InitializeParams struct {
-		InitializationOptions *InitializationOptions `json:"initializationOptions,omitempty"`
-		ClientInfo            ClientInfo             `json:"clientInfo"`
-		Locale                string                 `json:"locale"`
-		RootPath              string                 `json:"rootPath"`
-		RootURI               string                 `json:"rootUri"`
-		Trace                 string                 `json:"trace"`
-		WorkspaceFolders      *[]WorkspaceFolder     `json:"workspaceFolders"`
-		Capabilities          *json.RawMessage       `json:"capabilities,omitempty"`
-		ProcessID             int                    `json:"processId"`
-	}
-
-	WorkspaceFolder struct {
-		URI  string `json:"uri"`
-		Name string `json:"name"`
-	}
-
-	ClientInfo struct {
+	ServerInfo struct {
 		Name    string `json:"name"`
 		Version string `json:"version"`
-	}
-
-	ShowMessageParams struct {
-		Message string `json:"message"`
-		Type    uint   `json:"type"`
-	}
-
-	StaleRequestSupportClientCapabilities struct {
-		RetryOnContentModified []string `json:"retryOnContentModified"`
-		Cancel                 bool     `json:"cancel"`
-	}
-
-	InitializeResult struct {
-		Capabilities ServerCapabilities `json:"capabilities"`
-	}
-
-	ServerCapabilities struct {
-		CodeLensProvider           ResolveProviderOption     `json:"codeLensProvider"`
-		Workspace                  WorkspaceOptions          `json:"workspace"`
-		DiagnosticProvider         DiagnosticOptions         `json:"diagnosticProvider"`
-		CodeActionProvider         CodeActionOptions         `json:"codeActionProvider"`
-		ExecuteCommandProvider     ExecuteCommandOptions     `json:"executeCommandProvider"`
-		TextDocumentSyncOptions    TextDocumentSyncOptions   `json:"textDocumentSync"`
-		CompletionProvider         CompletionOptions         `json:"completionProvider"`
-		InlayHintProvider          ResolveProviderOption     `json:"inlayHintProvider"`
-		DocumentLinkProvider       ResolveProviderOption     `json:"documentLinkProvider"`
-		SignatureHelpProvider      SignatureHelpOptions      `json:"signatureHelpProvider"`
-		SemanticTokensProvider     SemanticTokensOptions     `json:"semanticTokensProvider"`
-		DocumentHighlightProvider  bool                      `json:"documentHighlightProvider"`
-		HoverProvider              bool                      `json:"hoverProvider"`
-		DocumentFormattingProvider bool                      `json:"documentFormattingProvider"`
-		FoldingRangeProvider       bool                      `json:"foldingRangeProvider"`
-		DocumentSymbolProvider     bool                      `json:"documentSymbolProvider"`
-		WorkspaceSymbolProvider    bool                      `json:"workspaceSymbolProvider"`
-		DefinitionProvider         bool                      `json:"definitionProvider"`
-		SelectionRangeProvider     bool                      `json:"selectionRangeProvider"`
-		LinkedEditingRangeProvider bool                      `json:"linkedEditingRangeProvider"`
-		Experimental               *ExperimentalCapabilities `json:"experimental,omitempty"`
-	}
-
-	// ExperimentalCapabilities contains Regal-specific custom LSP features
-	// that are not part of the base LSP specification. 'Experimental' comes
-	// from the field name in the spec, rather than their status. 'Experimental'
-	// features are more just 'custom' features we have build on the LSP.
-	ExperimentalCapabilities struct {
-		// ExplorerProvider indicates whether the server supports the regal.explorer
-		// command and regal/showExplorerResult notification.
-		ExplorerProvider bool `json:"explorerProvider"`
-		// InlineEvalProvider indicates whether the server supports the regal.eval
-		// command response being sent rather than written to file.
-		InlineEvalProvider bool `json:"inlineEvalProvider"`
-		// DebugProvider indicates whether the server supports the regal.debug
-		// command and regal/startDebugging request.
-		DebugProvider bool `json:"debugProvider"`
-		// OPATestProvider indicates whether the server supports testing-related features
-		// including running Rego tests via LSP command and test location notifications.
-		OPATestProvider bool `json:"opaTestProvider"`
 	}
 
 	TextDocumentPositionParams struct {
 		TextDocument TextDocumentIdentifier `json:"textDocument"`
 		Position     Position               `json:"position"`
 	}
-	DefinitionParams         = TextDocumentPositionParams
-	TextDocumentHoverParams  = TextDocumentPositionParams
-	LinkedEditingRangeParams = TextDocumentPositionParams
-
-	CompletionOptions struct {
-		CompletionItem    CompletionItemOptions `json:"completionItem"`
-		ResolveProvider   bool                  `json:"resolveProvider"`
-		TriggerCharacters []string              `json:"triggerCharacters,omitempty"`
-	}
-
-	CompletionItemOptions struct {
-		LabelDetailsSupport bool `json:"labelDetailsSupport"`
-	}
-
-	CompletionParams struct {
-		TextDocument TextDocumentIdentifier `json:"textDocument"`
-		Position     Position               `json:"position"`
-		Context      *CompletionContext     `json:"context,omitempty"`
-	}
-
-	CompletionContext struct {
-		TriggerCharacter string `json:"triggerCharacter"`
-		TriggerKind      uint   `json:"triggerKind"`
-	}
-
-	CompletionList struct {
-		Items        []CompletionItem `json:"items"`
-		IsIncomplete bool             `json:"isIncomplete"`
-	}
-
-	CompletionItem struct {
-		Data            any                         `json:"data,omitempty"`
-		LabelDetails    *CompletionItemLabelDetails `json:"labelDetails,omitempty"`
-		Documentation   *MarkupContent              `json:"documentation,omitempty"`
-		TextEdit        *TextEdit                   `json:"textEdit,omitempty"`
-		InserTextFormat *uint                       `json:"insertTextFormat,omitempty"`
-		SortText        *string                     `json:"sortText,omitempty"`
-		Label           string                      `json:"label"`
-		Detail          string                      `json:"detail"`
-		Kind            uint                        `json:"kind"`
-		Preselect       bool                        `json:"preselect"`
-	}
-
-	CompletionItemLabelDetails struct {
-		Description string `json:"description"`
-		Detail      string `json:"detail"`
-	}
-
-	WorkspaceFoldersServerCapabilities struct {
-		Supported bool `json:"supported"`
-	}
-
-	WorkspaceOptions struct {
-		FileOperations   FileOperationsServerCapabilities   `json:"fileOperations"`
-		WorkspaceFolders WorkspaceFoldersServerCapabilities `json:"workspaceFolders"`
-	}
-
-	CodeActionOptions struct {
-		CodeActionKinds []string `json:"codeActionKinds"`
-	}
-
-	CodeActionParams struct {
-		TextDocument TextDocumentIdentifier `json:"textDocument"`
-		Context      CodeActionContext      `json:"context"`
-		Range        Range                  `json:"range"`
-	}
-
-	CodeActionContext struct {
-		Diagnostics []Diagnostic `json:"diagnostics"`
-		Only        []string     `json:"only,omitempty"`
-		TriggerKind *uint8       `json:"triggerKind,omitempty"`
-	}
-
-	CodeAction struct {
-		Command     Command      `json:"command"`
-		IsPreferred *bool        `json:"isPreferred,omitempty"`
-		Title       string       `json:"title"`
-		Kind        string       `json:"kind"`
-		Diagnostics []Diagnostic `json:"diagnostics,omitempty"`
-	}
-
-	CodeLens struct {
-		Command *Command `json:"command,omitempty"`
-		Data    *any     `json:"data,omitempty"`
-		Range   Range    `json:"range"`
-	}
-
-	Command struct {
-		Arguments *[]any `json:"arguments,omitempty"`
-		Title     string `json:"title"`
-		Tooltip   string `json:"tooltip"`
-		Command   string `json:"command"`
-	}
-
-	DocumentHighlightParams = TextDocumentPositionParams
-
-	DocumentLink struct {
-		Range   Range  `json:"range"`
-		Target  string `json:"target,omitempty"`
-		Tooltip string `json:"tooltip,omitempty"`
-	}
-
-	DocumentHighlight struct {
-		Range Range `json:"range"`
-		Kind  uint  `json:"kind"`
-	}
-
-	LinkedEditingRanges struct {
-		Ranges      []Range `json:"ranges"`
-		WordPattern *string `json:"wordPattern,omitempty"`
-	}
-
-	SelectionRangeParams struct {
-		TextDocument TextDocumentIdentifier `json:"textDocument"`
-		Positions    []Position             `json:"positions"`
-	}
-
-	SelectionRange struct {
-		Range  Range           `json:"range"`
-		Parent *SelectionRange `json:"parent,omitempty"`
-	}
-
-	ExecuteCommandOptions struct {
-		Commands []string `json:"commands"`
-	}
+	DefinitionParams = TextDocumentPositionParams
+	HoverParams      = TextDocumentPositionParams
 
 	ExecuteCommandParams struct {
 		Command   string `json:"command"`
@@ -269,6 +79,18 @@ type (
 	}
 	WorkspaceAnyEdit struct {
 		DocumentChanges []any `json:"documentChanges"`
+	}
+
+	CreateFileOptions struct {
+		Overwrite      bool `json:"overwrite"`
+		IgnoreIfExists bool `json:"ignoreIfExists"`
+	}
+
+	CreateFile struct {
+		Options              *CreateFileOptions `json:"options,omitempty"`
+		AnnotationIdentifier *string            `json:"annotationId,omitempty"`
+		Kind                 string             `json:"kind"` // must always be "create"
+		URI                  string             `json:"uri"`
 	}
 
 	RenameFileOptions struct {
@@ -321,18 +143,18 @@ type (
 		Range   Range  `json:"range"`
 	}
 
-	DocumentFormattingParams struct {
-		TextDocument TextDocumentIdentifier `json:"textDocument"`
-		Options      FormattingOptions      `json:"options"`
-	}
-
 	TextDocumentParams struct {
 		TextDocument TextDocumentIdentifier `json:"textDocument"`
 	}
-	DocumentSymbolParams = TextDocumentParams
-	FoldingRangeParams   = TextDocumentParams
-	DocumentLinkParams   = TextDocumentParams
-	CodeLensParams       = TextDocumentParams
+
+	// Note(anderseknert): The LSP spec allows additional 'options' for formatting, like the number of
+	// spaces to use for indentation, etc. Since we don't support any formatter other than
+	// 'opa fmt' (and 'opa fmt'-compatible fixers), we don't represent that in DocumentFormattingParams.
+
+	DocumentFormattingParams = TextDocumentParams
+	DocumentSymbolParams     = TextDocumentParams
+	SemanticTokensParams     = TextDocumentParams
+	CodeLensParams           = TextDocumentParams
 
 	DocumentSymbol struct {
 		Detail         *string            `json:"detail,omitempty"`
@@ -354,80 +176,9 @@ type (
 		Kind          symbols.SymbolKind `json:"kind"`
 	}
 
-	FoldingRange struct {
-		StartCharacter *uint  `json:"startCharacter,omitempty"`
-		EndCharacter   *uint  `json:"endCharacter,omitempty"`
-		Kind           string `json:"kind"`
-		StartLine      uint   `json:"startLine"`
-		EndLine        uint   `json:"endLine"`
-	}
-
-	FormattingOptions struct {
-		TabSize                uint `json:"tabSize"`
-		InsertSpaces           bool `json:"insertSpaces"`
-		TrimTrailingWhitespace bool `json:"trimTrailingWhitespace"`
-		InsertFinalNewline     bool `json:"insertFinalNewline"`
-		TrimFinalNewlines      bool `json:"trimFinalNewlines"`
-	}
-
-	FileOperationsServerCapabilities struct {
-		DidCreate FileOperationRegistrationOptions `json:"didCreate"`
-		DidRename FileOperationRegistrationOptions `json:"didRename"`
-		DidDelete FileOperationRegistrationOptions `json:"didDelete"`
-	}
-
-	FileOperationRegistrationOptions struct {
-		Filters []FileOperationFilter `json:"filters"`
-	}
-
-	FileOperationFilter struct {
-		Scheme  string               `json:"scheme"`
-		Pattern FileOperationPattern `json:"pattern"`
-	}
-	FileOperationPattern struct {
-		Glob string `json:"glob"`
-	}
-
-	DiagnosticOptions struct {
-		Identifier            string `json:"identifier"`
-		InterFileDependencies bool   `json:"interFileDependencies"`
-		WorkspaceDiagnostics  bool   `json:"workspaceDiagnostics"`
-	}
-
-	// ResolveProviderOption is used by a number of providers in place of a boolean value.
-	// Note that at this point in time, we don't see a need for using resolver providers,
-	// so this option is always set to false.
-	ResolveProviderOption struct {
-		ResolveProvider bool `json:"resolveProvider"`
-	}
-
-	InlayHint struct {
-		Tooltip      MarkupContent `json:"tooltip"`
-		Label        string        `json:"label"`
-		Position     Position      `json:"position"`
-		Kind         uint          `json:"kind"`
-		PaddingLeft  bool          `json:"paddingLeft"`
-		PaddingRight bool          `json:"paddingRight"`
-	}
-
-	InlayHintParams struct {
-		TextDocument TextDocumentIdentifier `json:"textDocument"`
-		Range        Range                  `json:"range"`
-	}
-
-	SaveOptions struct {
-		IncludeText bool `json:"includeText"`
-	}
-
 	DidSaveTextDocumentParams struct {
 		Text         *string                `json:"text,omitempty"`
 		TextDocument TextDocumentIdentifier `json:"textDocument"`
-	}
-
-	TextDocumentSyncOptions struct {
-		Change    uint        `json:"change"`
-		OpenClose bool        `json:"openClose"`
-		Save      SaveOptions `json:"save"`
 	}
 
 	TextDocumentIdentifier struct {
@@ -484,11 +235,6 @@ type (
 		Character uint `json:"character"`
 	}
 
-	MarkupContent struct {
-		Kind  string `json:"kind"`
-		Value string `json:"value"`
-	}
-
 	DidOpenTextDocumentParams struct {
 		TextDocument TextDocumentItem `json:"textDocument"`
 	}
@@ -509,11 +255,6 @@ type (
 	Location struct {
 		URI   string `json:"uri"`
 		Range Range  `json:"range"`
-	}
-
-	Hover struct {
-		Contents MarkupContent `json:"contents"`
-		Range    Range         `json:"range"`
 	}
 
 	FilesParams struct {
@@ -547,58 +288,14 @@ type (
 		Value string `json:"value"`
 	}
 
-	SignatureHelpOptions struct {
-		TriggerCharacters []string `json:"triggerCharacters,omitempty"`
-	}
-
-	SignatureHelpParams struct {
-		TextDocument TextDocumentIdentifier `json:"textDocument"`
-		Position     Position               `json:"position"`
-		Context      *SignatureHelpContext  `json:"context,omitempty"`
-	}
-
-	SignatureHelpContext struct {
-		TriggerKind         uint           `json:"triggerKind"`
-		TriggerCharacter    *string        `json:"triggerCharacter,omitempty"`
-		IsRetrigger         bool           `json:"isRetrigger"`
-		ActiveSignatureHelp *SignatureHelp `json:"activeSignatureHelp,omitempty"`
-	}
-
-	SignatureHelp struct {
-		Signatures      []SignatureInformation `json:"signatures"`
-		ActiveSignature *uint                  `json:"activeSignature,omitempty"`
-		ActiveParameter *uint                  `json:"activeParameter,omitempty"`
-	}
-
-	SignatureInformation struct {
-		Label           string                 `json:"label"`
-		Documentation   string                 `json:"documentation,omitempty"`
-		Parameters      []ParameterInformation `json:"parameters,omitempty"`
-		ActiveParameter *uint                  `json:"activeParameter,omitempty"`
-	}
-
-	ParameterInformation struct {
-		Label         string  `json:"label"`
-		Documentation *string `json:"documentation,omitempty"`
-	}
-
 	SemanticTokens struct {
 		ResultID *string  `json:"resultId,omitempty"`
 		Data     []uint32 `json:"data"`
 	}
 
-	SemanticTokensParams struct {
-		TextDocument TextDocumentIdentifier `json:"textDocument"`
-	}
-
 	SemanticTokensLegend struct {
 		TokenTypes     []string `json:"tokenTypes"`
 		TokenModifiers []string `json:"tokenModifiers"`
-	}
-
-	SemanticTokensOptions struct {
-		Legend SemanticTokensLegend `json:"legend"`
-		Full   bool                 `json:"full,omitempty"`
 	}
 
 	ExplorerCommandArgs struct {
@@ -620,16 +317,140 @@ type (
 		Plan   string                `json:"plan,omitempty"`
 	}
 
-	ShowDocumentParams struct {
-		URI       string `json:"uri"`
-		External  *bool  `json:"external,omitempty"`
-		TakeFocus *bool  `json:"takeFocus,omitempty"`
-		Selection *Range `json:"selection,omitempty"`
-	}
-
-	ShowDocumentResult struct {
-		Success bool `json:"success"`
-	}
-
 	iuint interface{ ~int | ~uint }
 )
+
+func (p Position) ToOffset(text string) int {
+	if p.Line == 0 {
+		return util.SafeUintToInt(p.Character)
+	}
+
+	if offset := util.IndexByteNth(text, '\n', p.Line); offset > -1 {
+		return offset + 1 + util.SafeUintToInt(p.Character)
+	}
+
+	return len(text)
+}
+
+func (r RenameFile) AppendJSON(bs []byte) []byte {
+	bs = strconv.AppendQuote(append(bs, `{"kind":"rename","oldUri":`...), r.OldURI)
+	bs = strconv.AppendQuote(append(bs, `,"newUri":`...), r.NewURI)
+
+	if r.Options != nil && (r.Options.IgnoreIfExists || r.Options.Overwrite) {
+		bs = r.Options.AppendJSON(append(bs, `,"options":`...))
+	}
+
+	return append(bs, '}')
+}
+
+func (ro RenameFileOptions) AppendJSON(bs []byte) []byte {
+	bs = append(bs, '{')
+	if ro.IgnoreIfExists {
+		if bs = append(bs, `"ignoreIfExists":true`...); ro.Overwrite {
+			bs = append(bs, ',')
+		}
+	}
+
+	if ro.Overwrite {
+		bs = append(bs, `"overwrite":true`...)
+	}
+
+	return append(bs, '}')
+}
+
+func (d DeleteFile) AppendJSON(bs []byte) []byte {
+	bs = strconv.AppendQuote(append(bs, `{"kind":"delete","uri":`...), d.URI)
+
+	if d.Options != nil {
+		bs = d.Options.AppendJSON(append(bs, `,"options":`...))
+	}
+
+	return append(bs, '}')
+}
+
+func (do DeleteFileOptions) AppendJSON(bs []byte) []byte {
+	bs = append(bs, '{')
+	if do.IgnoreIfNotExists {
+		if bs = append(bs, `"ignoreIfNotExists":true`...); do.Recursive {
+			bs = append(bs, ',')
+		}
+	}
+
+	if do.Recursive {
+		bs = append(bs, `"recursive":true`...)
+	}
+
+	return append(bs, '}')
+}
+
+func (c CreateFile) AppendJSON(bs []byte) []byte {
+	bs = strconv.AppendQuote(append(bs, `{"kind":"create","uri":`...), c.URI)
+
+	if c.Options != nil {
+		bs = append(bs, `,"options":{`...)
+		if c.Options.IgnoreIfExists {
+			if bs = append(bs, `"ignoreIfExists":true`...); c.Options.Overwrite {
+				bs = append(bs, ',')
+			}
+		}
+
+		if c.Options.Overwrite {
+			bs = append(bs, []byte(`"overwrite":true`)...)
+		}
+
+		bs = append(bs, '}')
+	}
+
+	if c.AnnotationIdentifier != nil {
+		bs = strconv.AppendQuote(append(bs, `,"annotationId":`...), *c.AnnotationIdentifier)
+	}
+
+	return append(bs, '}')
+}
+
+func NewTextDocumentEdit(uri string, edits []TextEdit) TextDocumentEdit {
+	return TextDocumentEdit{
+		TextDocument: OptionalVersionedTextDocumentIdentifier{URI: uri},
+		Edits:        edits,
+	}
+}
+
+func (t TextDocumentEdit) AppendJSON(bs []byte) []byte {
+	bs = strconv.AppendQuote(append(bs, `{"textDocument":{"uri":`...), t.TextDocument.URI)
+
+	if t.TextDocument.Version != nil {
+		bs = outil.AppendInt(append(bs, `,"version":`...), *t.TextDocument.Version)
+	} else {
+		bs = append(bs, `,"version":null`...)
+	}
+
+	bs = append(bs, `},"edits":[`...)
+
+	for i, edit := range t.Edits {
+		if i > 0 {
+			bs = append(bs, ',')
+		}
+
+		bs = strconv.AppendQuote(append(bs, `{"newText":`...), edit.NewText)
+		bs = edit.Range.AppendJSON(append(bs, `,"range":`...))
+		bs = append(bs, '}')
+	}
+
+	return append(bs, ']', '}')
+}
+
+func RangeBetween[T1, T2, T3, T4 iuint](startLine T1, startCharacter T2, endLine T3, endCharacter T4) Range {
+	return Range{
+		Start: Position{Line: uint(startLine), Character: uint(startCharacter)},
+		End:   Position{Line: uint(endLine), Character: uint(endCharacter)},
+	}
+}
+
+func (r Range) AppendJSON(bs []byte) []byte {
+	bs = outil.AppendInt(append(bs, `{"start":{"line":`...), int(r.Start.Line))
+	bs = outil.AppendInt(append(bs, `,"character":`...), int(r.Start.Character))
+	bs = outil.AppendInt(append(bs, `},"end":{"line":`...), int(r.End.Line))
+	bs = outil.AppendInt(append(bs, `,"character":`...), int(r.End.Character))
+
+	return append(bs, '}', '}')
+}

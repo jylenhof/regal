@@ -1,7 +1,5 @@
 package regal.rules.testing["file-missing-test-suffix_test"]
 
-import data.regal.config
-
 import data.regal.rules.testing["file-missing-test-suffix"] as rule
 
 test_fail_test_in_file_without_test_suffix if {
@@ -16,7 +14,7 @@ test_fail_test_in_file_without_test_suffix if {
 		"description": "Files containing tests should have a _test.rego suffix",
 		"related_resources": [{
 			"description": "documentation",
-			"ref": config.docs.resolve_url("$baseUrl/$category/file-missing-test-suffix", "testing"),
+			"ref": "https://www.openpolicyagent.org/projects/regal/rules/testing/file-missing-test-suffix",
 		}],
 		"title": "file-missing-test-suffix",
 		"location": {"file": "policy.rego"},
@@ -29,8 +27,8 @@ test_success_test_in_file_with_test_suffix if {
 
 	test_foo if { false }
 	`)
-
 	r := rule.report with input as ast
+
 	r == set()
 }
 
@@ -39,7 +37,7 @@ test_success_test_in_file_named_test if {
 
 	test_foo if { false }
 	`)
-
 	r := rule.report with input as ast
+
 	r == set()
 }

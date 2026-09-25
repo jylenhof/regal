@@ -5,18 +5,20 @@
 **Category**: Bugs
 
 **Avoid**
+
 ```rego
 package policy
 
 import data.resources
 
-# 'resources' shadowed by import 
+# 'resources' shadowed by import
 resources contains resource if {
     # ...
 }
 ```
 
 **Prefer**
+
 ```rego
 package policy
 
@@ -47,12 +49,16 @@ Avoid shadowing either by renaming your rule or by using an alias for the import
 
 ## Configuration Options
 
-This linter rule provides the following configuration options:
+This linter rule provides the following [configuration options](https://www.openpolicyagent.org/projects/regal/configuration):
 
-```yaml
+```yaml title=".regal/config.yaml or .regal.yaml"
 rules:
   bugs:
     import-shadows-rule:
       # one of "error", "warning", "ignore"
       level: error
 ```
+
+## Related Resources
+
+- GitHub: [Source Code](https://github.com/open-policy-agent/regal/blob/main/bundle/regal/rules/bugs/import-shadows-rule/import_shadows_rule.rego)

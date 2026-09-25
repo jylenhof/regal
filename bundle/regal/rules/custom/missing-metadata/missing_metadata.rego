@@ -1,6 +1,11 @@
 # METADATA
 # description: Package or rule missing metadata
+# related_resources:
+#   - description: documentation
+#     ref: https://www.openpolicyagent.org/projects/regal/rules/custom/missing-metadata
 package regal.rules.custom["missing-metadata"]
+
+import future.keywords.not
 
 import data.regal.ast
 import data.regal.config
@@ -58,7 +63,7 @@ aggregate_report contains violation if {
 		item[1].package_annotated == false
 	}
 
-	not _excepted_package_pattern(cfg, pkg_path)
+	not regex.match(cfg["except-package-path-pattern"], pkg_path)
 
 	[file, item] := sort(aggs)[0]
 
@@ -78,13 +83,13 @@ aggregate_report contains violation if {
 		aggregate.annotated == false
 	}
 
-	not _excepted_rule_pattern(cfg, rule_path)
+	not regex.match(cfg["except-rule-path-pattern"], rule_path)
 
 	any_item := util.any_set_item(aggregates)
 
 	violation := result.fail(rego.metadata.chain(), {"location": object.union(any_item.location, {
 		"file": any_item.file,
-		"text": split(any_item.location.text, "\n")[0],
+		"text": strings.split_n(any_item.location.text, "\n", 1)[0],
 	})})
 }
 
@@ -111,10 +116,6 @@ _rule_path_aggs[rule_path] contains agg if {
 		"annotated": true in annotations,
 	}
 }
-
-_excepted_package_pattern(cfg, value) if regex.match(cfg["except-package-path-pattern"], value)
-
-_excepted_rule_pattern(cfg, value) if regex.match(cfg["except-rule-path-pattern"], value)
 
 # METADATA
 # schemas:

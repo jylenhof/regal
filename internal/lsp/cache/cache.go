@@ -27,27 +27,15 @@ type Cache struct {
 	// modules is a map of file URI to parsed AST modules from the latest file contents value
 	modules *concurrent.Map[string, *ast.Module]
 
-	// aggregateData stores the aggregate data from evaluations for each file.
-	// This is used to cache the results of expensive evaluations and can be used
-	// to update aggregate diagnostics incrementally.
-	aggregateData *concurrent.Object
-
 	// diagnosticsFile is a map of file URI to diagnostics for that file
 	diagnosticsFile *concurrent.Map[string, []types.Diagnostic]
 
 	// diagnosticsParseErrors is a map of file URI to parse errors for that file
 	diagnosticsParseErrors *concurrent.Map[string, []types.Diagnostic]
 
-	// builtinPositionsFile is a map of file URI to builtin positions for that file
-	builtinPositionsFile *concurrent.Map[string, map[uint][]types.BuiltinPosition]
-
-	// keywordLocationsFile is a map of file URI to Rego keyword locations for that file
-	// to be used for hover hints.
-	keywordLocationsFile *concurrent.Map[string, map[uint][]types.KeywordLocation]
-
 	// when a file is successfully parsed, the number of lines in the file is stored
 	// here. This is used to gracefully fail when exiting unparsable files.
-	successfulParseLineCounts *concurrent.Map[string, int]
+	successfulParseLineCounts *concurrent.Map[string, uint]
 }
 
 func NewCache() *Cache {
@@ -57,10 +45,7 @@ func NewCache() *Cache {
 		modules:                   concurrent.MapOf(make(map[string]*ast.Module)),
 		diagnosticsFile:           concurrent.MapOf(make(map[string][]types.Diagnostic)),
 		diagnosticsParseErrors:    concurrent.MapOf(make(map[string][]types.Diagnostic)),
-		builtinPositionsFile:      concurrent.MapOf(make(map[string]map[uint][]types.BuiltinPosition)),
-		keywordLocationsFile:      concurrent.MapOf(make(map[string]map[uint][]types.KeywordLocation)),
-		successfulParseLineCounts: concurrent.MapOf(make(map[string]int)),
-		aggregateData:             concurrent.NewObject(),
+		successfulParseLineCounts: concurrent.MapOf(make(map[string]uint)),
 	}
 }
 
@@ -111,51 +96,22 @@ func (c *Cache) SetModule(fileURI string, module *ast.Module) {
 }
 
 func (c *Cache) GetContentAndModule(fileURI string) (string, *ast.Module, bool) {
-	content, ok := c.GetFileContents(fileURI)
-	if !ok {
-		return "", nil, false
+	if content, ok := c.GetFileContents(fileURI); ok {
+		if module, ok := c.GetModule(fileURI); ok {
+			return content, module, true
+		}
 	}
 
-	module, ok := c.GetModule(fileURI)
-	if !ok {
-		return "", nil, false
-	}
-
-	return content, module, true
+	return "", nil, false
 }
 
 func (c *Cache) Rename(oldKey, newKey string) {
 	c.fileContents.RenameKey(oldKey, newKey)
 	c.ignoredFileContents.RenameKey(oldKey, newKey)
 	c.modules.RenameKey(oldKey, newKey)
-	c.aggregateData.RenameKey(oldKey, newKey)
 	c.diagnosticsFile.RenameKey(oldKey, newKey)
 	c.diagnosticsParseErrors.RenameKey(oldKey, newKey)
-	c.builtinPositionsFile.RenameKey(oldKey, newKey)
-	c.keywordLocationsFile.RenameKey(oldKey, newKey)
 	c.successfulParseLineCounts.RenameKey(oldKey, newKey)
-}
-
-func (c *Cache) SetAggregates(aggregates ast.Object) {
-	c.aggregateData.Reset(aggregates)
-}
-
-// SetFileAggregates sets aggregate data for the provided URI.
-func (c *Cache) SetFileAggregates(fileURI string, data ast.Object) {
-	if data != nil {
-		c.aggregateData.Set(fileURI, ast.NewTerm(data))
-	}
-}
-
-// GetFileAggregates is used to get aggregate data for a given list of files, or
-// all files if no file URIs are provided. Note that the returned object includes
-// also the provided file URIs as keys.. i.e. not just the values.
-func (c *Cache) GetFileAggregates(fileURIs ...string) ast.Object {
-	if len(fileURIs) == 0 {
-		return c.aggregateData.UnsafeObject()
-	}
-
-	return c.aggregateData.Keep(fileURIs...)
 }
 
 func (c *Cache) GetFileDiagnostics(uri string) ([]types.Diagnostic, bool) {
@@ -195,31 +151,11 @@ func (c *Cache) SetParseErrors(fileURI string, diags []types.Diagnostic) {
 	c.diagnosticsParseErrors.Set(fileURI, diags)
 }
 
-func (c *Cache) GetBuiltinPositions(fileURI string) (map[uint][]types.BuiltinPosition, bool) {
-	return c.builtinPositionsFile.Get(fileURI)
-}
-
-func (c *Cache) SetBuiltinPositions(fileURI string, positions map[uint][]types.BuiltinPosition) {
-	c.builtinPositionsFile.Set(fileURI, positions)
-}
-
-func (c *Cache) GetAllBuiltInPositions() map[string]map[uint][]types.BuiltinPosition {
-	return c.builtinPositionsFile.Clone()
-}
-
-func (c *Cache) SetKeywordLocations(fileURI string, keywords map[uint][]types.KeywordLocation) {
-	c.keywordLocationsFile.Set(fileURI, keywords)
-}
-
-func (c *Cache) GetKeywordLocations(fileURI string) (map[uint][]types.KeywordLocation, bool) {
-	return c.keywordLocationsFile.Get(fileURI)
-}
-
-func (c *Cache) GetSuccessfulParseLineCount(fileURI string) (int, bool) {
+func (c *Cache) GetSuccessfulParseLineCount(fileURI string) (uint, bool) {
 	return c.successfulParseLineCounts.Get(fileURI)
 }
 
-func (c *Cache) SetSuccessfulParseLineCount(fileURI string, count int) {
+func (c *Cache) SetSuccessfulParseLineCount(fileURI string, count uint) {
 	c.successfulParseLineCounts.Set(fileURI, count)
 }
 
@@ -229,11 +165,8 @@ func (c *Cache) Delete(fileURI string) {
 	c.fileContents.Delete(fileURI)
 	c.ignoredFileContents.Delete(fileURI)
 	c.modules.Delete(fileURI)
-	c.aggregateData.Delete(fileURI)
 	c.diagnosticsFile.Delete(fileURI)
 	c.diagnosticsParseErrors.Delete(fileURI)
-	c.builtinPositionsFile.Delete(fileURI)
-	c.keywordLocationsFile.Delete(fileURI)
 	c.successfulParseLineCounts.Delete(fileURI)
 }
 

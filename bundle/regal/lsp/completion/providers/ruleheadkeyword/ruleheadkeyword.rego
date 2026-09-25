@@ -11,7 +11,7 @@
 package regal.lsp.completion.providers.ruleheadkeyword
 
 import data.regal.lsp.completion.kind
-import data.regal.lsp.completion.location
+import data.regal.lsp.location
 
 # METADATA
 # description: Set of suggested completion items
@@ -23,6 +23,8 @@ items contains item if {
 	not startswith(line, "import")
 
 	word := location.word_at(line, input.params.position.character + 1)
+
+	not endswith(word.text_after, " ")
 
 	_word_matches(word.text)
 

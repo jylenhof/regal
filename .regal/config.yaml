@@ -132,10 +132,21 @@ rules:
       ignore:
         files:
           - "*_test.rego"
+    repeated-computation:
+      ignore:
+        files:
+          - "*_test.rego"
   style:
     line-length:
       level: error
       non-breakable-word-threshold: 100
+    prefer-snake-case:
+      level: error
+      ignore:
+        files:
+          # This package is used to build the LSP initialize
+          # response, and names must conform to the specification
+          - "**/bundle/regal/lsp/initialize/initialize.rego"
   imports:
     unresolved-reference:
       level: error
@@ -143,6 +154,9 @@ rules:
         - data.eval.**
         - data.internal**
         - data.schema.**
+        - data.client.**
+        - data.server.**
+        - data.workspace
         - data.workspace.**
         - data.regal.config.provided**
         - data.custom.regal**

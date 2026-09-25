@@ -5,6 +5,7 @@
 **Category**: Imports
 
 **Avoid**
+
 ```rego
 package policy
 
@@ -20,6 +21,7 @@ rule if {
 ```
 
 **Prefer**
+
 ```rego
 package policy
 ```
@@ -31,12 +33,16 @@ without the import.
 
 ## Configuration Options
 
-This linter rule provides the following configuration options:
+This linter rule provides the following [configuration options](https://www.openpolicyagent.org/projects/regal/configuration):
 
-```yaml
+```yaml title=".regal/config.yaml or .regal.yaml"
 rules:
   imports:
     pointless-import:
       # one of "error", "warning", "ignore"
       level: error
 ```
+
+## Related Resources
+
+- GitHub: [Source Code](https://github.com/open-policy-agent/regal/blob/main/bundle/regal/rules/imports/pointless-import/pointless_import.rego)

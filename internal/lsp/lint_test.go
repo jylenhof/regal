@@ -6,12 +6,12 @@ import (
 	"github.com/open-policy-agent/opa/v1/ast"
 
 	"github.com/open-policy-agent/regal/internal/lsp/cache"
-	"github.com/open-policy-agent/regal/internal/lsp/clients"
+	"github.com/open-policy-agent/regal/internal/lsp/client"
+	"github.com/open-policy-agent/regal/internal/lsp/store"
 	"github.com/open-policy-agent/regal/internal/lsp/types"
-	"github.com/open-policy-agent/regal/internal/parse"
+	"github.com/open-policy-agent/regal/internal/lsp/workspace"
 	"github.com/open-policy-agent/regal/internal/test/assert"
 	"github.com/open-policy-agent/regal/internal/test/must"
-	"github.com/open-policy-agent/regal/pkg/config"
 	"github.com/open-policy-agent/regal/pkg/report"
 )
 
@@ -87,6 +87,13 @@ allow[msg] { 1 == 1; msg := "hello" }
 			expectSuccess: true,
 			regoVersion:   ast.RegoUndefined,
 		},
+		"policy with import future keywords.not": {
+			fileURI:       "file:///valid.rego",
+			content:       "package test\nimport future.keywords.not\n",
+			expectModule:  true,
+			expectSuccess: true,
+			regoVersion:   ast.RegoV1,
+		},
 	}
 
 	for testName, testData := range tests {
@@ -97,18 +104,18 @@ allow[msg] { 1 == 1; msg := "hello" }
 			c.SetFileContents(testData.fileURI, testData.content)
 
 			success := must.Return(updateParse(t.Context(), updateParseOpts{
-				Cache:            c,
-				Store:            NewRegalStore(),
-				FileURI:          testData.fileURI,
-				Builtins:         ast.BuiltinMap,
-				RegoVersion:      testData.regoVersion,
-				ClientIdentifier: clients.IdentifierGeneric,
+				Cache:       c,
+				Store:       store.NewRegalStore(),
+				FileURI:     testData.fileURI,
+				Builtins:    ast.BuiltinMap,
+				RegoVersion: testData.regoVersion,
+				Workspace:   workspace.New("file:///").WithClient(client.NewGeneric()),
 			}))(t)
 
 			must.Equal(t, testData.expectSuccess, success, "success")
 
 			if _, ok := c.GetModule(testData.fileURI); testData.expectModule && !ok {
-				t.Fatalf("expected module to be set, but it was not")
+				t.Fatal("expected module to be set, but it was not")
 			}
 
 			diags, _ := c.GetParseErrors(testData.fileURI)
@@ -168,52 +175,4 @@ func TestConvertReportToDiagnostics(t *testing.T) {
 	}
 
 	assert.DeepEqual(t, expectedFileDiags, convertReportToDiagnostics(rpt, "workspaceRootURI"), "file diagnostics")
-}
-
-func TestLintWithConfigIgnoreWildcards(t *testing.T) {
-	t.Parallel()
-
-	rule := map[string]config.Category{"idiomatic": {"directory-package-mismatch": config.Rule{Level: "ignore"}}}
-	conf := &config.Config{Rules: rule}
-
-	contents := "package p\n\ncamelCase := 1\n"
-	fileURI := "file:///workspace/ignore/p.rego"
-
-	state := cache.NewCache()
-	state.SetFileContents(fileURI, contents)
-	state.SetModule(fileURI, parse.MustParseModule(contents))
-	state.SetFileDiagnostics(fileURI, []types.Diagnostic{})
-
-	opts := diagnosticsRunOpts{
-		Cache:            state,
-		RegalConfig:      conf,
-		FileURI:          fileURI,
-		WorkspaceRootURI: "file:///workspace",
-		UpdateForRules:   []string{"prefer-snake-case"},
-	}
-
-	must.Equal(t, nil, updateFileDiagnostics(t.Context(), opts))
-
-	diagnostics, _ := state.GetFileDiagnostics(fileURI)
-
-	must.Equal(t, 1, len(diagnostics), "number of diagnostics")
-	assert.Equal(t, "prefer-snake-case", diagnostics[0].Code, "diagnostic code")
-
-	// Clear the diagnostic and update the config with a wildcard ignore
-	// for any file in the ignore directory.
-	state.SetFileDiagnostics(fileURI, []types.Diagnostic{})
-
-	conf.Rules["style"] = config.Category{
-		"prefer-snake-case": config.Rule{
-			Level:  "error",
-			Ignore: &config.Ignore{Files: []string{"ignore/**"}},
-		},
-	}
-	opts.UpdateForRules = []string{"prefer-snake-case"}
-
-	must.Equal(t, nil, updateFileDiagnostics(t.Context(), opts))
-
-	if diagnostics, _ := state.GetFileDiagnostics(fileURI); len(diagnostics) != 0 {
-		t.Fatalf("Expected no diagnostics, got %v", diagnostics)
-	}
 }

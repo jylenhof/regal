@@ -1,16 +1,17 @@
 # METADATA
-# description: Avoid TODO comments
+# description: Avoid TODO and FIXME comments
+# related_resources:
+#   - description: documentation
+#     ref: https://www.openpolicyagent.org/projects/regal/rules/style/todo-comment
 package regal.rules.style["todo-comment"]
 
 import data.regal.ast
 import data.regal.result
 
 report contains violation if {
-	todo_identifiers := ["todo", "TODO", "fixme", "FIXME"]
-	todo_pattern := sprintf(`^\s*(%s)`, [concat("|", todo_identifiers)])
+	some location in ast.comments_decoded
 
-	some comment in ast.comments_decoded
-	regex.match(todo_pattern, comment.text)
+	regex.match(`(?i)^#\s*(todo|fixme)`, location.text)
 
-	violation := result.fail(rego.metadata.chain(), result.location(comment))
+	violation := result.fail(rego.metadata.chain(), result.with_text(location))
 }

@@ -16,6 +16,7 @@ import (
 
 	rbundle "github.com/open-policy-agent/regal/bundle"
 	"github.com/open-policy-agent/regal/internal/compile"
+	"github.com/open-policy-agent/regal/internal/io"
 	"github.com/open-policy-agent/regal/internal/util"
 	"github.com/open-policy-agent/regal/pkg/roast/rast"
 	"github.com/open-policy-agent/regal/pkg/roast/util/concurrent"
@@ -24,7 +25,6 @@ import (
 )
 
 const (
-	Keywords          = "data.regal.ast.keywords"
 	RuleHeadLocations = "data.regal.ast.rule_head_locations"
 	MainEval          = "data.regal.lsp.main.eval"
 	TestLocations     = "data.regal.lsp.testlocations.result"
@@ -167,9 +167,13 @@ func prepareQueryArgs(
 	rb *bundle.Bundle,
 ) (regoOptions, storage.Transaction) {
 	args := []func(*rego.Rego){
+		rego.Capabilities(io.Capabilities()),
 		rego.ParsedQuery(query), rego.ParsedBundle("regal", rb),
 		// For debugging, but we should probably make this conditional
 		rego.EnablePrintStatements(true), rego.PrintHook(topdown.NewPrintHook(os.Stderr)),
+		rego.GenerateJSON(func(term *ast.Term, _ *rego.EvalContext) (any, error) {
+			return term.Value, nil
+		}),
 	}
 	args = append(args, SchemaResolvers()...)
 

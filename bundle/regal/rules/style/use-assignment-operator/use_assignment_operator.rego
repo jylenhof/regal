@@ -1,5 +1,8 @@
 # METADATA
 # description: Prefer := over = for assignment
+# related_resources:
+#   - description: documentation
+#     ref: https://www.openpolicyagent.org/projects/regal/rules/style/use-assignment-operator
 package regal.rules.style["use-assignment-operator"]
 
 import data.regal.ast
@@ -13,7 +16,7 @@ report contains violation if {
 	# default foo(_) = "bar"
 	some rule in input.rules
 
-	rule.head.value.location
+	_ = rule.head.value.location
 	not rule.head.assign
 	not rule.head.key
 	not ast.is_chained_rule_body(rule, input.regal.file.lines)

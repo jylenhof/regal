@@ -35,8 +35,8 @@ func AnyToValue(x any) (ast.Value, error) {
 
 		return ast.Number(strconv.Itoa(x)), nil
 	case json.Number:
-		if interned := ast.InternedTerm(string(x)); interned != nil {
-			return interned.Value, nil
+		if ix, err := x.Int64(); err == nil {
+			return ast.InternedValue(ix), nil
 		}
 
 		return ast.Number(x), nil
@@ -98,6 +98,14 @@ func AnyToValue(x any) (ast.Value, error) {
 		}
 
 		return ast.NewObject(tuples...), nil
+	case *json.RawMessage:
+		var v any
+
+		if err := json.Unmarshal(*x, &v); err != nil {
+			return nil, fmt.Errorf("unmarshal raw message: %w", err)
+		}
+
+		return AnyToValue(v)
 	default:
 		return nil, fmt.Errorf("unsupported type: %T", x)
 	}

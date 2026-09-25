@@ -2,16 +2,21 @@ package lsp
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/sourcegraph/jsonrpc2"
 
+	rio "github.com/open-policy-agent/regal/internal/io"
 	"github.com/open-policy-agent/regal/internal/lsp/clients"
 	"github.com/open-policy-agent/regal/internal/lsp/types"
 	"github.com/open-policy-agent/regal/internal/lsp/uri"
 	"github.com/open-policy-agent/regal/internal/test/must"
+	"github.com/open-policy-agent/regal/internal/testutil"
 	"github.com/open-policy-agent/regal/pkg/roast/encoding"
 )
 
@@ -63,9 +68,6 @@ allow if {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-
 			receivedMessages := make(chan types.ApplyWorkspaceEditParams, defaultBufferedChannelSize)
 
 			createWorkspaceApplyEditTestHandler := func(
@@ -81,27 +83,18 @@ allow if {
 						return map[string]any{"applied": true}, nil
 					}
 
-					t.Fatalf("unexpected request: %v", req)
-
 					return struct{}{}, nil
 				}
 			}
 
-			tempDir := t.TempDir()
+			files := map[string]string{"main.rego": content}
+			tempDir := testutil.TempDirectoryOf(t, files)
 			clientHandler := createWorkspaceApplyEditTestHandler(t, receivedMessages)
-			ls, connClient := createAndInitServer(t, ctx, tempDir, clientHandler)
-
-			// set client identifier for this test since we are testing that behavior
-			ls.client.Identifier = clients.DetermineIdentifier(tc.clientName)
-
-			// edits are sent to the clinet by the command worker
-			go ls.StartCommandWorker(ctx)
-
-			mainRegoURI := uri.FromPath(clients.IdentifierGoTest, filepath.Join(tempDir, "main.rego"))
-			ls.cache.SetFileContents(mainRegoURI, content)
+			ls, connClient, ctx := createAndInitServerWithClientName(t, tempDir, clientHandler, tc.clientName)
+			ws := ls.Workspace()
 
 			// Create command arguments with proper JSON marshaling for Windows backslash escapes
-			commandArgs := types.CommandArgs{Target: mainRegoURI}
+			commandArgs := types.CommandArgs{Target: ws.URI("main.rego")}
 			argsJSON := must.Return(encoding.JSON().Marshal(commandArgs))(t)
 
 			executeParams := types.ExecuteCommandParams{
@@ -123,7 +116,7 @@ allow if {
 				must.Equal(t, 1, len(applyEditParams.Edit.DocumentChanges), "number of document changes")
 
 				docChange := applyEditParams.Edit.DocumentChanges[0]
-				must.Equal(t, mainRegoURI, docChange.TextDocument.URI, "document URI")
+				must.Equal(t, ws.URI("main.rego"), docChange.TextDocument.URI, "document URI")
 				must.Equal(t, len(tc.expectedEdits), len(docChange.Edits), "number of edits")
 
 				for i, expected := range tc.expectedEdits {
@@ -140,13 +133,6 @@ allow if {
 
 func TestExecuteCommandExplorer(t *testing.T) {
 	t.Parallel()
-
-	ctx, cancel := context.WithCancel(t.Context())
-
-	defer func() {
-		time.Sleep(200 * time.Millisecond)
-		cancel()
-	}()
 
 	receivedNotifications := make(chan map[string]any, defaultBufferedChannelSize)
 
@@ -182,12 +168,7 @@ func TestExecuteCommandExplorer(t *testing.T) {
 
 	tempDir := t.TempDir()
 	clientHandler := createExplorerNotificationTestHandler(t, receivedNotifications)
-	ls, connClient := createAndInitServer(t, ctx, tempDir, clientHandler)
-
-	// Set client identifier to VSCode so it uses the notification approach
-	ls.client.Identifier = clients.IdentifierVSCode
-
-	go ls.StartCommandWorker(ctx)
+	ls, connClient, ctx := createAndInitServerWithClientName(t, tempDir, clientHandler, "Visual Studio Code")
 
 	content := `package test
 
@@ -196,14 +177,14 @@ allow if {
 }
 `
 
-	mainRegoURI := uri.FromPath(clients.IdentifierGoTest, filepath.Join(tempDir, "test.rego"))
-	ls.cache.SetFileContents(mainRegoURI, content)
+	ws := ls.Workspace()
+	ls.cache.SetFileContents(ws.URI("test.rego"), content)
 
 	executeParams := types.ExecuteCommandParams{
 		Command: "regal.explorer",
 		Arguments: []any{
 			map[string]any{
-				"target":      mainRegoURI,
+				"target":      ws.URI("test.rego"),
 				"strict":      false,
 				"annotations": false,
 				"print":       false,
@@ -236,4 +217,231 @@ allow if {
 	case <-timeout.C:
 		t.Fatal("timeout waiting for regal/showExplorerResult notification")
 	}
+}
+
+func TestExecuteCommandEvalCreatesInputJSON(t *testing.T) {
+	t.Parallel()
+
+	inputJSONCreated := make(chan struct{}, 1)
+	showDocumentReceived := make(chan struct{}, 1)
+
+	clientHandler := func(_ context.Context, _ *jsonrpc2.Conn, req *jsonrpc2.Request) (any, error) {
+		switch req.Method {
+		case "window/showMessageRequest":
+			message := encoding.JSON().Get(*req.Params, "message").ToString()
+			if strings.Contains(message, "No input.json/yaml file was found.") {
+				t.Log("create input.json prompt received, replied to")
+
+				return new(json.RawMessage(`{"title":"Yes"}`)), nil
+			} else if strings.Contains(message, "created successfully") {
+				t.Log("input.json created successfully")
+
+				inputJSONCreated <- struct{}{}
+
+				// The success notification and prompt to open the file
+				return new(json.RawMessage(`{"title":"Open"}`)), nil
+			}
+
+		case "window/showDocument":
+			showDocumentReceived <- struct{}{}
+
+			t.Log("window/showDocument received")
+
+			return new(json.RawMessage(`{"success":true}`)), nil
+		}
+
+		return struct{}{}, nil
+	}
+
+	files := map[string]string{
+		"main.rego": `package test
+
+allow if {
+	input.foo.bar == "woo"
+	input.foo.wee.age == 24
+	input.superfoo.wee == "fun"
+	input.superbar.tee == "run"
+	input.list[0].name == "test"
+}`,
+		".regal/config.yaml": "",
+	}
+	tempDir := testutil.TempDirectoryOf(t, files)
+
+	ls, connClient, ctx := createAndInitServer(t, tempDir, clientHandler)
+	mainRegoURI := ls.Workspace().URI("main.rego")
+
+	timeout := time.NewTimer(determineTimeout())
+	defer timeout.Stop()
+
+	commandArgs := types.CommandArgs{Target: mainRegoURI, Query: "data.test.allow", Row: 3}
+	argsJSON := must.Return(encoding.JSON().Marshal(commandArgs))(t)
+
+	var executeResponse any
+
+	must.Equal(t, nil, connClient.Call(ctx, "workspace/executeCommand", types.ExecuteCommandParams{
+		Command:   "regal.eval",
+		Arguments: []any{string(argsJSON)},
+	}, &executeResponse))
+
+	// Checks if input.json has been created until the loop hits the timeout.
+	select {
+	case <-inputJSONCreated:
+		for {
+			if _, err := os.Stat(filepath.Join(tempDir, "input.json")); err == nil {
+				contents := must.Return(os.ReadFile(filepath.Join(tempDir, "input.json")))(t)
+				must.Equal(t, `{
+  "foo": {
+    "bar": "changeme",
+    "wee": {
+      "age": "changeme"
+    }
+  },
+  "list": {
+    "0": {
+      "name": "changeme"
+    }
+  },
+  "superbar": {
+    "tee": "changeme"
+  },
+  "superfoo": {
+    "wee": "changeme"
+  }
+}
+`, string(contents))
+
+				break
+			}
+
+			select {
+			case <-timeout.C:
+				t.Fatal("timed out waiting for input.json to be created")
+			default:
+				time.Sleep(50 * time.Millisecond)
+			}
+		}
+	case <-timeout.C:
+		t.Fatal("timed out waiting for window/showMessageRequest")
+	}
+
+	// Verify the success notification triggered window/showDocument.
+	select {
+	case <-showDocumentReceived:
+	case <-timeout.C:
+		t.Fatal("timed out waiting for window/showDocument")
+	}
+}
+
+func TestExecuteCommandCreateTest(t *testing.T) {
+	t.Parallel()
+
+	testCases := map[string]struct {
+		policyContent string
+		inputJSON     string
+		shouldSucceed bool
+		expectFile    bool
+	}{
+		"simple allow rule with input": {
+			policyContent: `package policy
+
+allow if {
+	input.foo == "woo"
+	input.bar == "wee"
+}`,
+			inputJSON:     `{"foo": "woo", "bar": "wee"}`,
+			shouldSucceed: true,
+			expectFile:    true,
+		},
+		"no input.json should fail": {
+			policyContent: `package policy
+
+allow if {
+	input.foo == "woo"
+}`,
+			inputJSON:     "",
+			shouldSucceed: false,
+			expectFile:    false,
+		},
+	}
+
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			clientHandler := func(_ context.Context, _ *jsonrpc2.Conn, req *jsonrpc2.Request) (any, error) {
+				switch req.Method {
+				case "window/showDocument":
+					return new(json.RawMessage(`{"success":true}`)), nil
+				default:
+					return struct{}{}, nil
+				}
+			}
+
+			files := map[string]string{"policy.rego": tc.policyContent}
+			if tc.inputJSON != "" {
+				files["input.json"] = tc.inputJSON
+			}
+
+			tempDir := testutil.TempDirectoryOf(t, files)
+			_, connClient, ctx := createAndInitServer(t, tempDir, clientHandler)
+
+			policyRegoURI := uri.FromPath(clients.IdentifierGoTest, filepath.Join(tempDir, "policy.rego"))
+
+			var executeResponse any
+			must.Equal(t, nil, connClient.Call(ctx, "workspace/executeCommand", types.ExecuteCommandParams{
+				Command: "regal.createTest",
+				Arguments: []any{
+					map[string]any{
+						"target": policyRegoURI,
+						"row":    1,
+					},
+				},
+			}, &executeResponse))
+
+			t.Logf("Command response: %v", executeResponse)
+
+			expectedTestFile := filepath.Join(tempDir, "policy_test.rego")
+
+			var fileExists bool
+
+			if tc.expectFile {
+				fileExists = waitForFile(expectedTestFile, 5*time.Second)
+			} else {
+				time.Sleep(100 * time.Millisecond)
+
+				fileExists = rio.Exists(expectedTestFile)
+			}
+
+			if tc.expectFile && !fileExists {
+				t.Error("Expected test file to be created, but it wasn't")
+			} else if !tc.expectFile && fileExists {
+				t.Error("Expected no test file, but one was created")
+			}
+
+			if fileExists {
+				contents := must.ReadFile(t, expectedTestFile)
+				t.Logf("Created test file contents:\n%s", contents)
+
+				if tc.shouldSucceed {
+					must.Equal(t, true, strings.Contains(contents, "package policy_test"), "should contain test package")
+					must.Equal(t, true, strings.Contains(contents, "test_allow if"), "should contain test function")
+					must.Equal(t, true, strings.Contains(contents, "policy.allow"), "should contain rule call")
+				}
+			}
+		})
+	}
+}
+
+func waitForFile(path string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+
+	for time.Now().Before(deadline) {
+		if rio.Exists(path) {
+			return true
+		}
+
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	return false
 }

@@ -10,11 +10,12 @@ import data.regal.ast
 import data.regal.result
 import data.regal.util
 
+import data.regal.lsp.client
 import data.regal.lsp.util.range
 
 # METADATA
 # entrypoint: true
-default result["response"] := []
+default result["response"] := null
 
 result["response"] := lenses if input.regal.file.parse_errors == []
 
@@ -35,8 +36,8 @@ lenses := array.concat(
 # METADATA
 # description: Debug lens included in response only when client supports it
 debug_supported if {
-	input.regal.client.init_options.enableDebugCodelens == true
-	input.regal.server.feature_flags.debug_provider == true
+	client.init_options.enableDebugCodelens == true
+	data.server.feature_flags.debug_provider == true
 }
 
 _module := data.workspace.parsed[input.params.textDocument.uri]

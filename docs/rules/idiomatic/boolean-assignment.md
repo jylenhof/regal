@@ -38,9 +38,9 @@ more_than_one_member if count(input.members) > 1
 
 ## Configuration Options
 
-This linter rule provides the following configuration options:
+This linter rule provides the following [configuration options](https://www.openpolicyagent.org/projects/regal/configuration):
 
-```yaml
+```yaml title=".regal/config.yaml or .regal.yaml"
 rules:
   idiomatic:
     boolean-assignment:
@@ -50,6 +50,6 @@ rules:
 
 ## Related Resources
 
-- Styra Blog: [How to express OR in Rego](https://www.styra.com/blog/how-to-express-or-in-rego/)
+- Styra Blog: [How to express OR in Rego](https://web.archive.org/web/https://www.styra.com/blog/how-to-express-or-in-rego/)
 - Regal Docs: [default-over-else](https://www.openpolicyagent.org/projects/regal/rules/style/default-over-else)
 - GitHub: [Source Code](https://github.com/open-policy-agent/regal/blob/main/bundle/regal/rules/idiomatic/boolean-assignment/boolean_assignment.rego)

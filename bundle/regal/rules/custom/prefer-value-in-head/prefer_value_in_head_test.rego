@@ -74,7 +74,8 @@ test_fail_value_could_be_in_head_but_not_a_scalar if {
 		input.x
 		x := [i | i := input[_]]
 	}`)
-	r := rule.report with input as module
+	r := rule.report
+		with input as module
 		with config.rules as {"custom": {"prefer-value-in-head": {"only-scalars": true}}}
 
 	r == set()
@@ -98,10 +99,11 @@ test_fail_value_could_be_in_head_templatestring if {
 }
 
 test_success_only_scalar_no_include_interpolated if {
-	r := rule.report with input as ast.policy(`value := x if {
-		input.x
-		x := $"{input.y}"
-	}`)
+	r := rule.report
+		with input as ast.policy(`value := x if {
+			input.x
+			x := $"{input.y}"
+		}`)
 		with config.rules as {"custom": {"prefer-value-in-head": {"only-scalars": true}}}
 
 	r == set()
@@ -194,7 +196,7 @@ expected := {
 	"level": "error",
 	"related_resources": [{
 		"description": "documentation",
-		"ref": config.docs.resolve_url("$baseUrl/$category/prefer-value-in-head", "custom"),
+		"ref": "https://www.openpolicyagent.org/projects/regal/rules/custom/prefer-value-in-head",
 	}],
 	"title": "prefer-value-in-head",
 	"location": {"file": "policy.rego"},

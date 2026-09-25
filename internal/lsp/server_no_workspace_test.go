@@ -1,7 +1,6 @@
 package lsp
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -40,16 +39,11 @@ rules:
 	// set up the workspace content with some example rego and regal config
 	tempDir := testutil.TempDirectoryOf(t, files)
 	mainRegoURI := uri.FromPath(clients.IdentifierGeneric, filepath.Join(tempDir, filepath.FromSlash(mainRegoFileName)))
-
-	receivedMessages := make(chan types.FileDiagnostics, defaultBufferedChannelSize)
-	clientHandler := test.HandlerFor(methodTdPublishDiagnostics, test.SendsToChannel(receivedMessages))
-
-	// set up the server and client connections
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
+	receivedMessages := receivedMessagesMap{"main.rego": make(chan []string, 10)}
+	clientHandler := createPublishDiagnosticsHandler(t, test.DebugLogger(t), receivedMessages)
 
 	// note using a blank tempDir here so we can simulate the single file mode
-	_, connClient := createAndInitServer(t, ctx, "", clientHandler)
+	_, connClient, ctx := createAndInitServer(t, "", clientHandler)
 
 	// client sends textDocument/didOpen notification with contents for main.rego
 	if err := connClient.Notify(ctx, "textDocument/didOpen", types.DidOpenTextDocumentParams{
@@ -66,14 +60,7 @@ rules:
 
 	// validate that the client received a diagnostics notification for the file
 	// with the correct items based on the settings.
-	for success := false; !success; {
-		select {
-		case requestData := <-receivedMessages:
-			success = testRequestDataCodes(t, requestData, mainRegoURI, []string{"opa-fmt"})
-		case <-timeout.C:
-			t.Fatalf("timed out waiting for file diagnostics to be sent")
-		}
-	}
+	waitForViolations(t, "main.rego", []string{"opa-fmt"}, []string{}, timeout, receivedMessages)
 
 	timeout.Reset(determineTimeout())
 }

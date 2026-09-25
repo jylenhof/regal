@@ -5,7 +5,7 @@
 package regal.lsp.completion.providers.packagename
 
 import data.regal.lsp.completion.kind
-import data.regal.lsp.completion.location
+import data.regal.lsp.location
 
 # METADATA
 # description: set of suggested package names
@@ -36,8 +36,8 @@ items contains item if {
 	}
 }
 
-_base(uri) := str if {
-	end := trim_prefix(uri, "file://")
+_base(u) := str if {
+	end := trim_prefix(u, "file://")
 	str := substring(end, 0, regal.last(indexof_n(end, input.regal.environment.path_separator)))
 }
 

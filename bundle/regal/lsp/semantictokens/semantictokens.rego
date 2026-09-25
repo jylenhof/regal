@@ -10,7 +10,7 @@
 #   - https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_semanticTokens
 # schemas:
 #   - input:        schema.regal.lsp.common
-#   - input.params: schema.regal.lsp.semantictokens
+#   - input.params: schema.regal.lsp.textdocument
 package regal.lsp.semantictokens
 
 import data.regal.lsp.semantictokens.vars.comprehensions
@@ -32,10 +32,5 @@ default result["response"] := {}
 result["response"] := {
 	"packages": packages.result,
 	"imports": imports.result,
-	"vars": {
-		"function_args": function_args.result,
-		"comprehensions": comprehensions.result,
-		"every_expr": every_expr.result,
-		"some_expr": some_expr.result,
-	},
+	"vars": union({function_args.result, comprehensions.result, every_expr.result, some_expr.result}),
 }

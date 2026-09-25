@@ -10,29 +10,23 @@ import data.regal.ast
 test_function(param1, param2) := result if {
 	ast.is_constant
 }`
-	result := semantictokens.result with input as {"params": {"textDocument": {"uri": "file://p.rego"}}}
-		with data.workspace.parsed["file://p.rego"] as regal.parse_module("p.rego", policy)
+	module := regal.parse_module("p.rego", policy)
+	result := semantictokens.result with data.workspace.parsed["file:///p.rego"] as module
+		with input.params.textDocument.uri as "file:///p.rego"
+		with input.regal.file.lines as split(policy, "\n")
 
 	result == {"response": {
-		"imports": {{"location": "3:19:3:22", "type": "string", "value": "ast"}},
-		"packages": {{"location": "1:15:1:18", "type": "string", "value": "woo"}},
+		"imports": {
+			{"col": 0, "length": 6, "line": 2, "type": 3},
+			{"col": 18, "length": 3, "line": 2, "type": 2},
+		},
+		"packages": {
+			{"col": 0, "length": 7, "line": 0, "modifiers": 0, "type": 3},
+			{"col": 14, "length": 3, "line": 0, "modifiers": 0, "type": 0},
+		},
 		"vars": {
-			"comprehensions": {
-				"declaration": set(),
-				"reference": set(),
-			},
-			"every_expr": {
-				"declaration": set(),
-				"reference": set(),
-			},
-			"function_args": {
-				"declaration": {
-					{"location": "5:15:5:21", "type": "var", "value": "param1"},
-					{"location": "5:23:5:29", "type": "var", "value": "param2"},
-				},
-				"reference": set(),
-			},
-			"some_expr": {"declaration": set(), "reference": set()},
+			{"col": 14, "length": 6, "line": 4, "modifiers": 1, "type": 1},
+			{"col": 22, "length": 6, "line": 4, "modifiers": 1, "type": 1},
 		},
 	}}
 }

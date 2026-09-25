@@ -14,7 +14,8 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
-	"github.com/open-policy-agent/regal/internal/git"
+	outil "github.com/open-policy-agent/opa/v1/util"
+
 	rio "github.com/open-policy-agent/regal/internal/io"
 	"github.com/open-policy-agent/regal/internal/util"
 	"github.com/open-policy-agent/regal/pkg/config"
@@ -49,7 +50,7 @@ as it is important to understand why they were flagged.`, "\n", " ")
 		Use:   "fix <path> [path [...]]",
 		Short: "Fix Rego source files",
 		Long: func() string {
-			fixableRules := util.Map(fixes.NewDefaultFixes(), fixes.Fix.Name)
+			fixableRules := outil.Map(fixes.NewDefaultFixes(), fixes.Fix.Name)
 			if len(fixableRules) == 0 {
 				return intro
 			}
@@ -69,6 +70,8 @@ The linter rules with automatic fixes available are currently:
 		},
 
 		RunE: wrapProfiling(func(args []string) error {
+			relaxGC()
+
 			if err := fix(args, params); err != nil {
 				log.SetOutput(os.Stderr)
 				log.Println(err)
@@ -87,6 +90,7 @@ The linter rules with automatic fixes available are currently:
 	fixCommand.Flags().BoolVarP(&params.verbose, "verbose", "", false, "show the full changes applied in the console")
 	fixCommand.Flags().BoolVarP(&params.force, "force", "", false,
 		"allow fixing of files that have uncommitted changes in git or when git is not being used")
+	_ = fixCommand.Flags().MarkDeprecated("force", "git check feature removed, no longer needed")
 	fixCommand.Flags().StringVarP(&params.conflictMode, "on-conflict", "", "error",
 		"configure behavior when filename conflicts are detected. Options are 'error' (default) or 'rename'")
 
@@ -222,7 +226,7 @@ func fix(args []string, params *fixParams) (err error) {
 	}
 
 	// TODO: Figure out why filtered returns duplicates in the first place
-	filtered = slices.Compact(util.Sorted(filtered))
+	filtered = slices.Compact(outil.Sorted(filtered))
 
 	// convert the filtered paths to absolute paths before fixing to
 	// support accurate root matching.
@@ -263,33 +267,6 @@ func fix(args []string, params *fixParams) (err error) {
 		}
 
 		return errors.New("fixing failed due to conflicts")
-	}
-
-	if !params.dryRun && !params.force {
-		gitRepo, err := git.FindGitRepo(args...)
-		if err != nil {
-			return fmt.Errorf("failed to establish git repo (use --force to override): %w", err)
-		}
-
-		if gitRepo == "" {
-			return errors.New("no git repo found to support undo (use --force to override)")
-		}
-
-		// if the fixer is being run in a git repo, we must not fix files that have changes
-		cf, err := git.GetChangedFiles(gitRepo)
-		if err != nil {
-			return fmt.Errorf("failed to get changed files: %w", err)
-		}
-
-		conflictingFiles := util.NewSet(fileProvider.ModifiedFiles()...).Intersect(util.NewSet(cf...))
-		if conflictingFiles.Size() > 0 {
-			return fmt.Errorf(
-				`the following files have been changed since the fixer was run:
-- %s
-please run fix from a clean state to support the use of git to undo, or use --force to ignore`,
-				strings.Join(conflictingFiles.Items(), "\n- "),
-			)
-		}
 	}
 
 	if params.verbose {

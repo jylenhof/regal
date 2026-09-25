@@ -1,5 +1,8 @@
 # METADATA
 # description: Use `some` to declare output variables
+# related_resources:
+#   - description: documentation
+#     ref: https://www.openpolicyagent.org/projects/regal/rules/idiomatic/use-some-for-output-vars
 package regal.rules.idiomatic["use-some-for-output-vars"]
 
 import data.regal.ast
@@ -18,7 +21,7 @@ report contains violation if {
 		var.value == term.value
 	}
 
-	rule := input.rules[to_number(rule_index)]
+	rule := input.rules[rule_index]
 
 	not ast.is_in_local_scope(rule, term.location, term.value)
 

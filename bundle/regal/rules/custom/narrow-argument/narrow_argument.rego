@@ -1,6 +1,11 @@
 # METADATA
 # description: Function argument can be narrowed
+# related_resources:
+#   - description: documentation
+#     ref: https://www.openpolicyagent.org/projects/regal/rules/custom/narrow-argument
 package regal.rules.custom["narrow-argument"]
+
+import future.keywords.not
 
 import data.regal.ast
 import data.regal.config
@@ -23,12 +28,9 @@ report contains violation if {
 	))
 }
 
-_message(1, arg, narrowed) := $"Argument {arg} only referenced as {narrowed}, value passed can be narrowed"
+_message(1, arg, x) := $"Argument {arg} only referenced as {x}, value passed can be narrowed"
 
-_message(n, arg, narrowed) := sprintf(
-	"Argument %s always referenced by a common prefix, value passed can be narrowed to %s",
-	[arg, narrowed],
-) if {
+_message(n, arg, x) := $"Argument {arg} always referenced by a common prefix, value passed can be narrowed to {x}" if {
 	n > 1
 }
 
@@ -60,7 +62,7 @@ _first_named_arg_location(indices, name) := [arg.location |
 
 _arg_used_in_call(indices, name) if {
 	some i in indices
-	some call in ast.function_calls[ast.rule_index_strings[i]]
+	some call in ast.function_calls[i]
 	some arg in call.args
 
 	# only check for vars here, as refs are already dealt with
@@ -86,20 +88,20 @@ _functions[name] contains {"rule_index": i, "args_refs": args_refs} if {
 		some arg in args
 		arg.type == "var"
 		not startswith(arg.value, "$")
-		not _exclude_arg(arg.value)
+		not arg.value in config.rules.custom["narrow-argument"]["exclude-args"]
 	}
 
 	# we don't care for functions without named variable arguments
 	variable_args != []
 
 	args_refs := {arg: ref_vals |
-		arg := ast.found.refs[ast.rule_index_strings[i]][_].value[0].value
+		arg := ast.found.refs[i][_].value[0].value
 		arg in variable_args
 		ref_vals := {vals |
 			some j
-			ast.found.refs[ast.rule_index_strings[i]][j].value[0].value == arg
+			ast.found.refs[i][j].value[0].value == arg
 
-			ref := ast.found.refs[ast.rule_index_strings[i]][j].value
+			ref := ast.found.refs[i][j].value
 			vals := [term.value | some term in array.slice(ref, 0, _first_var_pos(ref))]
 		}
 	}
@@ -114,8 +116,6 @@ _first_var_pos(ref) := pos if {
 		i > 0
 	][0]
 } else := count(ref) + 1
-
-_exclude_arg(name) if name in config.rules.custom["narrow-argument"]["exclude-args"]
 
 _to_terms(arr) := [_to_term(item) | some item in arr]
 

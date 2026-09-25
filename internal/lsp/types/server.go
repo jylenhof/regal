@@ -10,10 +10,16 @@ type ServerFeatureFlags struct {
 	// InlineEvaluationProvider indicates whether the server supports the regal.eval
 	// command response being sent rather than written to file.
 	InlineEvaluationProvider bool `json:"inline_evaluation_provider"`
+	// InlineEvaluationCoverageProvider indicates whether regal.eval responses include
+	// a "coverage" field.
+	InlineEvaluationCoverageProvider bool `json:"inline_evaluation_coverage_provider"`
 	// DebugProvider indicates whether the server supports the regal.debug
 	// command and regal/startDebugging request.
 	DebugProvider bool `json:"debug_provider"`
 	// OPATestProvider indicates whether the server supports testing-related features
 	// including running Rego tests via LSP command and test location notifications.
 	OPATestProvider bool `json:"opa_test_provider"`
+	// TestCreationProvider indicates whether the server supports the regal.createTest
+	// command for creating tests from rule dependencies.
+	TestCreationProvider bool `json:"test_creation_provider"`
 }

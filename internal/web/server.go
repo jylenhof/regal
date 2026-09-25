@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"embed"
 	"fmt"
 	"net"
 	"net/http"
@@ -14,6 +15,9 @@ import (
 	"github.com/open-policy-agent/regal/internal/util"
 )
 
+//go:embed index.html style.css
+var content embed.FS
+
 type Server struct {
 	log     *log.Logger
 	baseURL string
@@ -23,16 +27,6 @@ var pprofEndpoints = os.Getenv("REGAL_DEBUG") != "" || os.Getenv("REGAL_DEBUG_PP
 
 func NewServer(logger *log.Logger) *Server {
 	return &Server{log: logger}
-}
-
-func (s *Server) GetBaseURL() string {
-	return s.baseURL
-}
-
-// SetBaseURL sets the base URL for the server
-// NOTE: This is normally set by the server itself, and this method is provided only for testing purposes.
-func (s *Server) SetBaseURL(baseURL string) {
-	s.baseURL = baseURL
 }
 
 func (s *Server) Start(context.Context) {
@@ -54,23 +48,7 @@ func (s *Server) Start(context.Context) {
 	}
 
 	// root handler for those looking for what the server is
-	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
-		body := `
-<h1>Regal Language Server</h1>
-<ul>`
-
-		if pprofEndpoints {
-			body += `<li><a href="/debug/pprof/">pprof</a></li>
-<li><a href="/debug/statsviz">statsviz</a></li>
-</ul>`
-		} else {
-			body += `Start server with REGAL_DEBUG or REGAL_DEBUG_PPROF set to enable pprof endpoints`
-		}
-
-		if _, err := w.Write([]byte(body)); err != nil {
-			s.log.Message("failed to write response: %v", err)
-		}
-	})
+	mux.Handle("/", http.FileServerFS(content))
 
 	freePort, err := util.FreePort(5052, 5053, 5054)
 	if err != nil {

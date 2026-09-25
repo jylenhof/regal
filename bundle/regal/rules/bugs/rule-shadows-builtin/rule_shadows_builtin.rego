@@ -1,5 +1,8 @@
 # METADATA
 # description: Rule name shadows built-in
+# related_resources:
+#   - description: documentation
+#     ref: https://www.openpolicyagent.org/projects/regal/rules/bugs/rule-shadows-builtin
 package regal.rules.bugs["rule-shadows-builtin"]
 
 import data.regal.ast
@@ -10,5 +13,5 @@ report contains violation if {
 
 	ast.ref_to_string(head.ref) in ast.builtin_namespaces
 
-	violation := result.fail(rego.metadata.chain(), result.location(head))
+	violation := result.fail(rego.metadata.chain(), result.location(head.ref))
 }

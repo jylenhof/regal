@@ -4,6 +4,10 @@
 #   with OPA's AST, more recently in the form of RoAST
 package regal.ast
 
+import future.keywords.and
+import future.keywords.not
+import future.keywords.or
+
 import data.regal.config
 import data.regal.util
 
@@ -37,11 +41,8 @@ operators := {
 # description: |
 #   returns true if provided term is either a scalar or a collection of ground values
 # scope: document
-is_constant(term) if term.type in scalar_types
-
 is_constant(term) if {
-	term.type in {"array", "object", "set"}
-	not has_term_var(term.value)
+	term.type in scalar_types or term.type in {"array", "object", "set"} and not has_term_var(term.value)
 }
 
 # METADATA
@@ -54,9 +55,11 @@ is_wildcard(term) if {
 default builtin_names := set()
 
 # METADATA
-# description: set containing the name of all built-in functions (given the active capabilities)
+# description: |
+#   set containing the name of all built-in functions (given the active capabilities)
+#   deprecated: prefer to use `regal.config.builtin_names`
 # scope: document
-builtin_names := object.keys(config.capabilities.builtins)
+builtin_names := config.builtin_names
 
 # METADATA
 # description: |
@@ -78,22 +81,19 @@ package_name := concat(".", package_path)
 
 # METADATA
 # description: provides the full package name including the "data." prefix,
-package_name_full := concat("", ["data.", package_name])
+package_name_full := $"data.{package_name}"
 
 # METADATA
 # description: provides all static string values from ref
 named_refs(ref) := [term |
 	some i, term in ref
-	_is_name(term.type, i)
+	i == 0 and term.type == "var" or i > 0 and term.type == "string"
 ]
-
-_is_name("var", 0)
-_is_name("string", pos) if pos > 0
 
 # METADATA
 # description: all the rules (excluding functions) in the input AST
 rules := [rule |
-	some rule in input.rules
+	some rule in _rules
 
 	not rule.head.args
 ]
@@ -110,7 +110,7 @@ tests := [rule |
 # METADATA
 # description: all the functions declared in the input AST
 functions := [rule |
-	some rule in input.rules
+	some rule in _rules
 	rule.head.args
 ]
 
@@ -121,7 +121,7 @@ functions := [rule |
 #   private rules (or even packages), so using this rule should be preferred over
 #   manually checking for this using the rule ref
 public_rules_and_functions := [rule |
-	some rule in input.rules
+	some rule in _rules
 	not startswith(rule.head.ref[0].value, "_")
 
 	every term in array.slice(rule.head.ref, 1, 100) {
@@ -146,12 +146,12 @@ identifiers := rule_and_function_names | imported_identifiers
 rule_names contains name if {
 	some i, name in rule_names_ordered
 
-	not input.rules[i].head.args
+	not _rules[i].head.args
 }
 
 # METADATA
 # description: all rule and function names in the input AST indexed by position
-rule_names_ordered := [ref_static_to_string(rule.head.ref) | some rule in input.rules]
+rule_names_ordered := [ref_static_to_string(rule.head.ref) | some rule in _rules]
 
 # METADATA
 # description: |
@@ -159,10 +159,7 @@ rule_names_ordered := [ref_static_to_string(rule.head.ref) | some rule in input.
 #   input = variable value set elsewhere in the policy
 #   output =  variable value set in this location (unification)
 # scope: document
-is_output_var(rule, var) if {
-	# test the cheap and common case first, and 'else' only when it's not
-	is_wildcard(var)
-} else if {
+is_output_var(rule, var) if is_wildcard(var) or {
 	not var.value in (rule_names | imported_identifiers)
 
 	num_above := count([1 |
@@ -185,17 +182,11 @@ is_output_var(rule, var) if {
 
 # METADATA
 # description: |
-#   returns an array of all rule indices, as strings. this will be needed until
-#   https://github.com/open-policy-agent/opa/issues/6736 is fixed
-rule_index_strings := [sprintf("%d", [i]) | some i, _ in _rules]
-
-# METADATA
-# description: |
 #   a map containing all function calls (built-in and custom) in the input AST
 #   keyed by rule index
 function_calls[rule_index] contains call if {
-	some rule_index in rule_index_strings
-	some ref in found.calls[rule_index]
+	some rule_index
+	ref := found.calls[rule_index][_]
 
 	name := ref_to_string(ref[0].value)
 	call := {
@@ -269,6 +260,19 @@ _format_term(term) := concat("", [".", term.value]) if {
 
 # METADATA
 # description: |
+#   returns the static prefic of a terms array
+static_prefix(terms) := terms if {
+	count(terms) == 1
+} else := static if {
+	static := array.slice(terms, 0, [i |
+		some i, term in terms
+		i > 0
+		term.type == {"call", "var", "ref", "templatestring"}
+	][0])
+} else := terms
+
+# METADATA
+# description: |
 #   returns the string representation of a ref up until its first
 #   non-static (i.e. variable) value, if any:
 #   foo.bar -> foo.bar
@@ -301,10 +305,32 @@ builtin_functions_called contains name if {
 # METADATA
 # description: |
 #   Returns custom functions declared in input policy in the same format as builtin capabilities
-function_decls[name] := {"decl": {"args": [{"type": "any"} | head.args[_]], "result": {"type": "any"}}} if {
-	head := functions[_].head
-	name := ref_to_string(head.ref)
+function_decls[name] := info if {
+	names := {name |
+		head := functions[_].head
+		name := ref_static_to_string(head.ref)
+	}
+	heads := {name: heads[0] |
+		some name in names
+
+		heads := [rule.head |
+			some rule in functions
+			ref_static_to_string(rule.head.ref) == name
+		]
+	}
+
+	some name, head in heads
+
+	info := {
+		"decl": {
+			"args": [{"type": _custom_arg_type(arg.type), "name": arg.value} | some arg in head.args],
+			"result": {"type": "any"},
+		},
+	}
 }
+
+_custom_arg_type(type) := type if type != "var"
+_custom_arg_type("var") := "any"
 
 # METADATA
 # description: returns the args for function past the expected number of args
@@ -400,8 +426,8 @@ assignment_terms(terms) := [terms[1], terms[2]] if is_assignment(terms[0])
 #   For a given rule head name, this rule contains a list of locations where
 #   there is a rule head with that name.
 rule_head_locations[name] contains {"row": loc.row, "col": loc.col} if {
-	some i, rule in input.rules
+	some i, rule in _rules
 
-	name := $"data.{package_name}.{rule_names_ordered[i]}"
+	name := $"{package_name_full}.{rule_names_ordered[i]}"
 	loc := util.to_location_object(rule.head.location)
 }

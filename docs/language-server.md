@@ -58,7 +58,21 @@ or expanded, which may be useful for hiding content that is not relevant to the 
   src={require('./assets/lsp/folding.png').default}
   alt="Screenshot of folding ranges as displayed in Zed"/>
 
-Regal supports folding ranges for blocks, imports and comments.
+Regal provides folding ranges for all AST nodes that may span more than a single line, like rules, functions,
+comprehensions, collection literals, and more. The server additionally provides folding ranges for import and comment
+"blocks", where consecutive imports and comments are grouped together in a single folding range.
+
+The language server specification allows editors to present a few
+[capabilities](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#foldingRangeClientCapabilities)
+related to folding ranges. The two most relevant to Regal are both supported by the language server:
+
+- `lineFoldingOnly` tells Regal that the editor only supports folding whole lines, and that folding always starts and
+  ends at the beginning of a line. When set to `true` (which it commonly is by default), Regal will skip calculating
+  character positions for where folding should start and end, which generally results in faster rendering of the folding
+  ranges.
+- `rangeLimit` is a positive integer value that when provided tells Regal the maximum number of folding ranges that the
+  server should return. While Regal honors this setting, the number is commonly in the thousands (for example, VS Code's
+  default is 5000), which is much higher than the number of folding ranges that a typical Rego file would have.
 
 ### Document and workspace symbols
 
@@ -119,9 +133,24 @@ be suggestions for:
   src={require('./assets/lsp/completion.png').default}
   alt="Screenshot of completion suggestions as displayed in Zed"/>
 
-New completion providers are added continuously, so if you have a suggestion for
-a new completion, please
-[open an issue](https://github.com/open-policy-agent/regal/issues)!
+New completion providers are added continuously, so if you have a suggestion for a new completion, please
+[file an issue](https://github.com/open-policy-agent/regal/issues)!
+
+#### Editor support
+
+VS Code currently prevents (or severely limits) displaying suggestions from language servers like Regal whenever
+GitHub Copilot's "ghost text suggestions" feature is enabled. Since this feature is typically enabled — possibly even by
+default, many users risk missing out on code completions provided by language servers without even realizing it. Whether
+overriding language server suggestions is intentional or not is currently unclear, as
+[the issue](https://github.com/microsoft/vscode/issues/315257) has been reported but not yet addressed by the VS Code
+maintainers.
+
+While AI-assisted suggestions occasionally can be helpful, they aren't based on the same deep understanding of the
+language or the context as those provided by language servers. Unless you heavily rely on GitHub Copilot's suggestions,
+**we recommend disabling the "ghost text suggestions" feature as long as Copilot is overriding language server
+suggestions**.
+
+The toggle is easily accessible from the UI, so you can even turn it on and off as needed.
 
 ### Code actions
 

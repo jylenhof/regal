@@ -1,5 +1,8 @@
 # METADATA
 # description: Call to `walk` can be optimized
+# related_resources:
+#   - description: documentation
+#     ref: https://www.openpolicyagent.org/projects/regal/rules/performance/walk-no-path
 package regal.rules.performance["walk-no-path"]
 
 import data.regal.ast
@@ -14,8 +17,8 @@ report contains violation if {
 
 	path_var := call.args[1].value[0]
 
-	not ast.is_wildcard(path_var)
-	not ast.var_in_head(input.rules[to_number(rule_index)].head, path_var.value)
+	not startswith(path_var.value, "$")
+	not ast.var_in_head(input.rules[rule_index].head, path_var.value)
 
 	not _var_in_other_call(ast.function_calls, rule_index, path_var)
 	not _var_value_in_ref(rule_index, path_var.value)

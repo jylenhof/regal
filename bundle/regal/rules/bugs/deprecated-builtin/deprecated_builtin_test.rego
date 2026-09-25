@@ -12,7 +12,10 @@ test_fail_call_to_deprecated_builtin_function if {
 	}
 	`)
 
-	r := rule.report with input as module with config.capabilities as {"builtins": {"any": {}}}
+	r := rule.report
+		with input as module
+		with config.capabilities as {"builtins": {"any": {}}}
+
 	r == {{
 		"category": "bugs",
 		"description": "Avoid using deprecated built-in functions",
@@ -22,23 +25,27 @@ test_fail_call_to_deprecated_builtin_function if {
 			"file": "policy.rego",
 			"row": 7,
 			"text": "\t\tany([true, false])",
-			"end": {"col": 6, "row": 7},
+			"end": {
+				"col": 6,
+				"row": 7,
+			},
 		},
 		"related_resources": [{
 			"description": "documentation",
-			"ref": config.docs.resolve_url("$baseUrl/$category/deprecated-builtin", "bugs"),
+			"ref": "https://www.openpolicyagent.org/projects/regal/rules/bugs/deprecated-builtin",
 		}],
 		"title": "deprecated-builtin",
 	}}
 }
 
 test_success_deprecated_builtin_not_in_capabilities if {
-	module := ast.with_rego_v1(`
-	allow if {
-		any([true, false])
-	}
-	`)
+	r := rule.report
+		with input as ast.with_rego_v1(`
+			allow if {
+				any([true, false])
+			}
+		`)
+		with config.capabilities as {"builtins": {"http.send": {}}}
 
-	r := rule.report with input as module with config.capabilities as {"builtins": {"http.send": {}}}
 	r == set()
 }

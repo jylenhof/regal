@@ -8,6 +8,7 @@
 #   scope of a single file
 package regal.main
 
+import data.regal.aggregators
 import data.regal.ast
 import data.regal.config
 import data.regal.notices
@@ -119,8 +120,9 @@ report contains violation if {
 
 # Check custom rules
 report contains violation if {
-	file_name_relative_to_root := trim_prefix(input.regal.file.name, concat("", [config.path_prefix, "/"]))
 	not _globally_ignored
+
+	file_name_relative_to_root := trim_prefix(input.regal.file.name, concat("", [config.path_prefix, "/"]))
 
 	some category, title
 	violation := data.custom.regal.rules[category][title].report[_]
@@ -135,7 +137,10 @@ report contains violation if {
 aggregate[input.regal.file.name].common contains {
 	"package_name": ast.package_name,
 	"package_name_full": ast.package_name_full,
+	"package_path": ast.package_path,
 	"lines": input.regal.file.lines,
+	"rule_tree": aggregators.rule_tree,
+	"imports": aggregators.imports,
 }
 
 # METADATA
@@ -153,7 +158,7 @@ aggregate[input.regal.file.name][key] contains entry if {
 # METADATA
 # description: collects aggregates in custom rules
 # scope: rule
-aggregate[input.regal.file.name][category_title] contains entry if {
+aggregate[input.regal.file.name][$"{category}/{title}"] contains entry if {
 	not _globally_ignored
 
 	some category, title
@@ -161,11 +166,7 @@ aggregate[input.regal.file.name][category_title] contains entry if {
 	not config.ignored_rule(category, title)
 	not config.excluded_file(category, title, input.regal.file.name)
 
-	entries := _mark_if_empty(data.custom.regal.rules[category][title].aggregate)
-
-	category_title := concat("/", [category, title])
-
-	some entry in entries
+	some entry in _mark_if_empty(data.custom.regal.rules[category][title].aggregate)
 }
 
 # a custom aggregate rule may not come back with entries, but we still need

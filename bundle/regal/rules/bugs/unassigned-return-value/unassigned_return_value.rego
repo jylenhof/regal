@@ -1,5 +1,8 @@
 # METADATA
 # description: Non-boolean return value unassigned
+# related_resources:
+#   - description: documentation
+#     ref: https://www.openpolicyagent.org/projects/regal/rules/bugs/unassigned-return-value
 package regal.rules.bugs["unassigned-return-value"]
 
 import data.regal.ast
@@ -11,11 +14,11 @@ report contains violation if {
 	terms := ast.found.expressions[_][expr].terms
 
 	not expr.interpolated
+	not expr.negated
 
 	terms[0].type == "ref"
-	terms[0].value[0].type == "var"
 
-	ref_name := terms[0].value[0].value
+	ref_name := ast.ref_to_string(terms[0].value)
 	ref_name in ast.builtin_names
 
 	# special case as the "result" of print is ""

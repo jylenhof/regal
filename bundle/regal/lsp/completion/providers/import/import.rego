@@ -3,7 +3,7 @@
 package regal.lsp.completion.providers.import
 
 import data.regal.lsp.completion.kind
-import data.regal.lsp.completion.location
+import data.regal.lsp.location
 
 # METADATA
 # description: all completion suggestions for the import keyword
@@ -18,9 +18,31 @@ items contains item if {
 		"label": "import",
 		"kind": kind.keyword,
 		"detail": "import <path>",
+		"documentation": {
+			"kind": "markdown",
+			"value": doc,
+		},
 		"textEdit": {
 			"range": location.word_range(word, input.params.position),
 			"newText": "import ",
 		},
 	}
 }
+
+# METADATA
+# description: documentation for import suggestion
+## exported for test
+doc := $`### import
+
+Add import to package. Examples:
+
+{_code}
+`
+
+_code := concat("\n", [
+	"```rego",
+	"import data.users",
+	"import input.environment as env",
+	"import future.keywords.not",
+	"```",
+])

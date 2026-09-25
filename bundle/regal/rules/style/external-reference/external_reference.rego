@@ -1,6 +1,11 @@
 # METADATA
 # description: External reference in function
+# related_resources:
+#   - description: documentation
+#     ref: https://www.openpolicyagent.org/projects/regal/rules/style/external-reference
 package regal.rules.style["external-reference"]
+
+import future.keywords.or
 
 import data.regal.ast
 import data.regal.config
@@ -10,7 +15,7 @@ import data.regal.util
 report contains violation if {
 	some i
 	arg_vars := _args_vars(input.rules[i].head.args)
-	own_vars := {value | value := ast.found.vars[ast.rule_index_strings[i]][_][_].value}
+	own_vars := {value | value := ast.found.vars[i][_][_].value}
 
 	# note: parens added by opa fmt 🤦
 	allowed_refs := (arg_vars | own_vars) | ast.all_function_namespaces
@@ -51,7 +56,7 @@ _named_vars(arg) := {var.value | some var in ast.find_term_vars(arg)} if arg.typ
 #   "fn_namespaces" in the report rule
 _function_call_ctx(fun, path) if {
 	object.get(fun, array.slice(path, 0, count(path) - 4), false).type == "call"
-} else if {
+} or {
 	terms_path := array.slice(path, 0, util.last_indexof(path, "terms") + 2)
 	next_term_path := array.flatten([
 		array.slice(terms_path, 0, count(terms_path) - 1), # ["body", 0, "terms", 0] -> ["body", 0, "terms"]

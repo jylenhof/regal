@@ -1,11 +1,5 @@
 package types
 
-import (
-	"github.com/open-policy-agent/opa/v1/ast"
-
-	"github.com/open-policy-agent/regal/internal/lsp/clients"
-)
-
 // Ref is a generic construct for an object found in a Rego module.
 // Ref is designed to be used in completions and provides information
 // relevant to the object with that operation in mind.
@@ -30,20 +24,6 @@ const (
 	Function
 )
 
-type BuiltinPosition struct {
-	Builtin *ast.Builtin
-	Line    uint
-	Start   uint
-	End     uint
-}
-
-type KeywordLocation struct {
-	Name  string
-	Line  uint
-	Start uint
-	End   uint
-}
-
 type CommandArgs struct {
 	// Target is the URI of the document for which the command applies to
 	Target string `json:"target"`
@@ -57,42 +37,9 @@ type CommandArgs struct {
 	Row int `json:"row,omitempty"`
 }
 
-type Client struct {
-	Identifier   clients.Identifier     `json:"identifier"`
-	InitOptions  *InitializationOptions `json:"init_options,omitempty"`
-	Capabilities ast.Value              `json:"capabilities,omitempty"`
-}
-
-func NewGenericClient() Client {
-	return Client{Identifier: clients.IdentifierGeneric}
-}
-
-func (c Client) SupportsExplorer() bool {
-	return c.InitOptions != nil &&
-		c.InitOptions.EnableExplorer != nil &&
-		*c.InitOptions.EnableExplorer
-}
-
-func (c Client) SupportsDebugCodeLens() bool {
-	return c.InitOptions != nil &&
-		c.InitOptions.EnableDebugCodelens != nil &&
-		*c.InitOptions.EnableDebugCodelens
-}
-
-func (c Client) SupportsEvalCodelensDisplayInline() bool {
-	return c.InitOptions != nil &&
-		c.InitOptions.EvalCodelensDisplayInline != nil &&
-		*c.InitOptions.EvalCodelensDisplayInline
-}
-
-func (c Client) SupportsOPATestProvider() bool {
-	return c.InitOptions != nil &&
-		c.InitOptions.EnableServerTesting != nil &&
-		*c.InitOptions.EnableServerTesting
-}
-
 // ServerContext is a type which is used to contain things from the server's
 // state that is needed in RegalContext.
 type ServerContext struct {
 	FeatureFlags ServerFeatureFlags `json:"feature_flags"`
+	Version      string             `json:"version"`
 }

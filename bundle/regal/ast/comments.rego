@@ -1,19 +1,24 @@
 package regal.ast
 
-import data.regal.util
-
 # METADATA
-# description: all comments in the input AST with their `text` attribute base64 decoded
+# description: all comments in the input AST
 comments_decoded := [decoded |
-	some comment in input.comments
+	some location in _comments
 
-	text_decoded := base64.decode(comment.text)
-	decoded := object.union_n([
-		comment,
-		{"text": text_decoded},
-		{"location": util.to_location_no_text(comment.location)},
-		{"location": {"text": $"#{text_decoded}"}},
-	])
+	[row_str, col_str, end_row_str, end_col_str] := split(location, ":")
+	row := to_number(row_str)
+	col := to_number(col_str)
+	text := substring(input.regal.file.lines[row - 1], col - 1, -1)
+
+	decoded := {
+		"row": row,
+		"col": col,
+		"end": {
+			"row": to_number(end_row_str),
+			"col": to_number(end_col_str),
+		},
+		"text": text,
+	}
 ]
 
 # METADATA
@@ -27,18 +32,20 @@ comments["metadata_attributes"] := {
 	"scope",
 	"title",
 	"description",
+	"labels",
 	"related_resources",
 	"authors",
 	"organizations",
 	"schemas",
 	"entrypoint",
 	"custom",
+	"compile",
 }
 
 # METADATA
 # description: true if comment matches a metadata annotation attribute
 comments["annotation_match"](str) if regex.match(
-	`^\s*(scope|title|description|related_resources|authors|organizations|schemas|entrypoint|custom)\s*:`,
+	`^#?\s*(scope|title|description|labels|related_resources|authors|organizations|schemas|entrypoint|custom|compile)\s*:`,
 	str,
 )
 
@@ -47,13 +54,13 @@ comments["annotation_match"](str) if regex.match(
 #   map of all ignore directive comments, like ("# regal ignore:line-length")
 #   found in input AST, indexed by the row they're at
 ignore_directives[row] := rules if {
-	some comment in comments_decoded
+	some location in comments_decoded
 
-	contains(comment.text, "regal ignore:")
+	contains(location.text, "regal ignore:")
 
-	row := comment.location.row + 1
+	row := location.row + 1
 
-	rules := regex.split(`,\s*`, trim_space(regex.replace(comment.text, `^.*regal ignore:\s*(\S+)`, "$1")))
+	rules := regex.split(`,\s*`, trim_space(regex.replace(location.text, `^.*regal ignore:\s*(\S+)`, "$1")))
 }
 
 # METADATA
@@ -63,7 +70,7 @@ ignore_directives[row] := rules if {
 #   one before is considered to be part of a block.
 comment_blocks(comments_decoded) := blocks if {
 	row_partitions := [partition |
-		rows := [comment.location.row | some comment in comments_decoded]
+		rows := [location.row | some location in comments_decoded]
 		breaks := _splits(rows)
 
 		some j, k in breaks
@@ -77,15 +84,24 @@ comment_blocks(comments_decoded) := blocks if {
 	blocks := [block |
 		some row_partition in row_partitions
 		some block in {col: partition |
-			some comment in row_partition
+			some location in row_partition
 
-			col := comment.location.col # regal ignore:comprehension-term-assignment
-			partition := [partition_comment |
-				some partition_comment in row_partition
-				partition_comment.location.col == col
+			col := location.col # regal ignore:comprehension-term-assignment
+			partition := [partition_location |
+				some partition_location in row_partition
+				partition_location.col == col
 			]
 		}
 	]
+}
+
+# see _rules for information about this hack and why we need it for now
+_comments := input.comments
+
+_comments := data.workspace.parsed[u].comments if {
+	not input.comments
+
+	u := object.get(input, ["params", "textDocument", "uri"], null)
 }
 
 _splits(rows) := array.flatten([

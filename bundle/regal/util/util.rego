@@ -2,6 +2,8 @@
 # description: various utility functions for linter policies
 package regal.util
 
+import future.keywords.or
+
 # METADATA
 # description: |
 #   returns a set of sets containing all indices of duplicates in the array,
@@ -71,8 +73,6 @@ to_location_no_text(loc) := {
 		"col": to_number(end_col_str),
 	},
 } if {
-	is_string(loc)
-
 	[row_str, col_str, end_row_str, end_col_str] := split(loc, ":")
 }
 
@@ -235,11 +235,10 @@ repeat(str, n) := replace(sprintf("%-*s", [n, " "]), " ", str)
 # description: |
 #   adds source files for each aggregate in aggs array, which is only useful
 #   for testing, when this isn't done in the main routing logic
-with_source_files(aggregator, aggs) := {file: {aggregator: agg} |
+with_source_files(aggregator, aggs) := {$"p{i + 1}.rego": {aggregator: agg} |
 	is_string(aggregator)
 
 	some i, agg in aggs
-	file := sprintf("p%d.rego", [i + 1])
 }
 
 # METADATA
@@ -247,15 +246,15 @@ with_source_files(aggregator, aggs) := {file: {aggregator: agg} |
 contains_location(sup, sub) if {
 	sup.row < sub.row
 	sup.end.row > sub.end.row
-} else if {
+} or {
 	sup.row == sub.row
 	sup.col <= sub.col
 	sup.end.row > sub.end.row
-} else if {
+} or {
 	sup.row < sub.row
 	sup.end.row == sub.end.row
 	sup.end.col >= sub.end.col
-} else if {
+} or {
 	sup.row == sub.row
 	sup.col <= sub.col
 	sup.end.row == sub.end.row

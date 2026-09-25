@@ -85,14 +85,6 @@ func WriteFile(tb testing.TB, path string, contents []byte) {
 	}
 }
 
-func Remove(tb testing.TB, path string) {
-	tb.Helper()
-
-	if err := os.Remove(path); err != nil {
-		tb.Fatalf("failed to remove file %s: %v", path, err)
-	}
-}
-
 func RemoveAll(tb testing.TB, path ...string) {
 	tb.Helper()
 

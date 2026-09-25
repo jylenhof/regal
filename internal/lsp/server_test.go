@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -12,10 +13,12 @@ import (
 
 	"github.com/sourcegraph/jsonrpc2"
 
+	outil "github.com/open-policy-agent/opa/v1/util"
+
 	"github.com/open-policy-agent/regal/internal/lsp/clients"
 	"github.com/open-policy-agent/regal/internal/lsp/connection"
 	"github.com/open-policy-agent/regal/internal/lsp/handler"
-	"github.com/open-policy-agent/regal/internal/lsp/log"
+	"github.com/open-policy-agent/regal/internal/lsp/test"
 	"github.com/open-policy-agent/regal/internal/lsp/types"
 	"github.com/open-policy-agent/regal/internal/lsp/uri"
 	"github.com/open-policy-agent/regal/internal/testutil"
@@ -29,9 +32,12 @@ const (
 	// maximum time observed for an operation to complete.
 	defaultTimeout             = 20 * time.Second
 	defaultBufferedChannelSize = 5
+	// testPollInterval is the polling interval used in tests when waiting for
+	// state changes. Smaller value means a faster happy path.
+	testPollInterval = 100 * time.Millisecond
 )
 
-type messages map[string]chan []string
+type receivedMessagesMap map[string]chan []string
 
 // determineTimeout returns a timeout duration based on whether
 // the test suite is running with race detection, if so, a more permissive
@@ -46,11 +52,45 @@ func determineTimeout() time.Duration {
 	return defaultTimeout
 }
 
-func createAndInitServer(t *testing.T, ctx context.Context, tempDir string, clientHandler connection.HandlerFunc) (
+// drainMessages drains all pending messages from a channel.
+// This is useful in tests to clear buffered messages and avoid race conditions
+// where old messages are consumed instead of waiting for new ones.
+// It's common for messages to build up in the race detector when things are
+// running very slowly.
+func drainMessages[T any](ch chan T) {
+	for {
+		select {
+		case <-ch:
+			// Keep draining
+		default:
+			return
+		}
+	}
+}
+
+func createAndInitServer(t *testing.T, tempDir string, clientHandler connection.HandlerFunc) (
 	*LanguageServer,
 	*jsonrpc2.Conn,
+	context.Context,
 ) {
 	t.Helper()
+
+	return createAndInitServerWithClientName(t, tempDir, clientHandler, "go test")
+}
+
+func createAndInitServerWithClientName(
+	t *testing.T,
+	tempDir string,
+	clientHandler connection.HandlerFunc,
+	clientName string,
+) (
+	*LanguageServer,
+	*jsonrpc2.Conn,
+	context.Context,
+) {
+	t.Helper()
+
+	ctx, cancel := context.WithCancel(t.Context())
 
 	// This is set due to eventing being so slow in go test -race that we
 	// get flakes. TODO, work out how to avoid needing this in lsp tests.
@@ -59,65 +99,116 @@ func createAndInitServer(t *testing.T, ctx context.Context, tempDir string, clie
 		pollingInterval = 10 * time.Second
 	}
 
-	logger := log.NewLogger(log.LevelDebug, t.Output())
-
 	// set up the server and client connections
 	ls := NewLanguageServer(ctx, &LanguageServerOptions{
-		Logger:                   logger,
+		Logger:                   test.DebugLogger(t),
 		WorkspaceDiagnosticsPoll: pollingInterval,
-		FeatureFlags:             DefaultServerFeatureFlags(),
 	})
 
-	go ls.StartDiagnosticsWorker(ctx)
-	go ls.StartConfigWorker(ctx)
+	ls.StartDiagnosticsWorker(ctx)
+	ls.StartTestLocationsWorker(ctx)
+	ls.StartCommandWorker(ctx)
+
+	// Not started automatically:
+	// - ls.StartConfigWorker(ctx): Manually started where needed
+	// - StartTemplateWorker: Manually started where needed to test for ordering bugs
+	// - StartWorkspaceStateWorker: Only needed for long-running tests monitoring workspace changes
+	// - StartQueryCacheWorker: Only needed in dev mode (REGAL_BUNDLE_PATH set)
+	// - StartWebServer: Not used in tests
 
 	netConnServer, netConnClient := net.Pipe()
 
 	connServer := connection.New(ctx, netConnServer, ls.Handle)
 	connClient := connection.New(ctx, netConnClient, clientHandler)
 
-	go func() {
-		<-ctx.Done()
-		// we need only close the pipe connections as the jsonrpc2.Conn accept the ctx
+	// Register cleanup to cancel context, wait for workers, and close connections.
+	// t.Cleanup runs after test completes (including any defers in the test).
+	t.Cleanup(func() {
+		// Cancel first so workers and in-flight lintFunc observe ctx.Done()
+		// and exit. Without this, Shutdown deadlocks waiting for a lintFunc
+		// that never returns (e.g. OPA compilation under -race).
+		cancel()
+
+		//nolint:usetesting
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+
+		_ = ls.Shutdown(shutdownCtx)
+
+		// Close the pipes to make jsonrpc2's readMessages goroutine hit a
+		// read error and exit its loop.
 		_ = netConnClient.Close()
 		_ = netConnServer.Close()
-	}()
+
+		// Wait for readMessages to fully exit before calling conn.Close().
+		// conn.Close() closes pending call.done channels; if readMessages
+		// is still processing a response it will panic sending on one.
+		// DisconnectNotify fires after readMessages returns.
+		<-connServer.DisconnectNotify()
+		<-connClient.DisconnectNotify()
+
+		_ = connServer.Close()
+		_ = connClient.Close()
+	})
 
 	ls.SetConn(connServer)
+
+	// Determine client identifier from name for URI construction
+	clientIdentifier := clients.DetermineIdentifier(clientName)
 
 	// a blank tempDir means no workspace root was required.
 	rootURI := ""
 	if tempDir != "" {
-		rootURI = uri.FromPath(clients.IdentifierGeneric, tempDir)
+		rootURI = uri.FromPath(clientIdentifier, tempDir)
 	}
 
-	request := types.InitializeParams{
-		RootURI:    rootURI,
-		ClientInfo: types.ClientInfo{Name: "go test"},
-		InitializationOptions: &types.InitializationOptions{
-			EnableDebugCodelens:       new(true),
-			EnableExplorer:            new(true),
-			EvalCodelensDisplayInline: new(true),
-			EnableServerTesting:       new(true),
+	request := new(json.RawMessage(fmt.Sprintf(`{
+		"rootUri": %q,
+		"clientInfo": {
+			"name": %q
 		},
-	}
+		"initializationOptions": {
+			"enableDebugCodelens": true,
+			"enableExplorer": true,
+			"evalCodelensDisplayInline": true,
+			"enableServerTesting": true
+		}
+	}`, rootURI, clientName)))
 
-	var response types.InitializeResult
+	var response struct {
+		Capabilities any              `json:"capabilities"`
+		ServerInfo   types.ServerInfo `json:"serverInfo,omitzero"`
+	}
 	testutil.NoErr(connClient.Call(ctx, "initialize", request, &response))(t)
 
 	// 2. Client sends initialized notification
 	// no response to the call is expected
 	testutil.NoErr(connClient.Call(ctx, "initialized", struct{}{}, nil))(t)
 
-	return ls, connClient
+	// wait for the server to complete the start up process to avoid races
+	// where the initial workspace loading and linting races with requests
+	// sent in tests. This is not an issue for diagnostics, since the file jobs
+	// are only run after the initializationGate is closed, but the server can
+	// still process other requests like apply edits and commands which
+	// can cause inconsistent filecontents in the cache.
+	<-ls.initializationGate
+
+	return ls, connClient, ctx
 }
 
-func createPublishDiagnosticsHandler(t *testing.T, out io.Writer, messages messages) connection.HandlerFunc {
+func createPublishDiagnosticsHandler(
+	t *testing.T,
+	out io.Writer,
+	receivedMessages receivedMessagesMap,
+) connection.HandlerFunc {
 	t.Helper()
 
-	return func(_ context.Context, _ *jsonrpc2.Conn, req *jsonrpc2.Request) (result any, err error) {
+	return func(ctx context.Context, _ *jsonrpc2.Conn, req *jsonrpc2.Request) (result any, err error) {
 		if req.Method != methodTdPublishDiagnostics {
-			fmt.Fprintln(out, "createClientHandler: unexpected request method:", req.Method)
+			// Check context before writing to test output to avoid panic if test has completed
+			if ctx.Err() == nil {
+				fmt.Fprintln(out, "createClientHandler: unexpected request method:", req.Method)
+			}
 
 			return struct{}{}, nil
 		}
@@ -129,12 +220,15 @@ func createPublishDiagnosticsHandler(t *testing.T, out io.Writer, messages messa
 			}
 
 			fileBase := filepath.Base(params.URI)
-			fmt.Fprintln(out, "createPublishDiagnosticsHandler: queue", fileBase, len(messages[fileBase]))
+			// Check context before writing to test output to avoid panic if test has completed
+			if ctx.Err() == nil {
+				fmt.Fprintln(out, "createPublishDiagnosticsHandler: queue", fileBase, len(receivedMessages[fileBase]))
+			}
 
 			select {
-			case messages[fileBase] <- util.Sorted(violations):
+			case receivedMessages[fileBase] <- outil.Sorted(violations):
 			case <-time.After(1 * time.Second):
-				t.Fatalf("timeout writing to messages channel for %s", fileBase)
+				t.Fatalf("timeout writing to receivedMessages channel for %s", fileBase)
 			}
 
 			return struct{}{}, nil
@@ -142,41 +236,108 @@ func createPublishDiagnosticsHandler(t *testing.T, out io.Writer, messages messa
 	}
 }
 
-func createMessageChannels(files map[string]string) messages {
-	messages := make(messages, len(files))
+func createMessageChannels(files map[string]string) receivedMessagesMap {
+	receivedMessages := make(receivedMessagesMap, len(files))
 	for _, file := range util.MapKeys(files, filepath.Base) {
-		messages[file] = make(chan []string, 10)
+		receivedMessages[file] = make(chan []string, 10)
 	}
 
-	return messages
+	return receivedMessages
 }
 
-func testRequestDataCodes(t *testing.T, requestData types.FileDiagnostics, fileURI string, codes []string) bool {
+func TestPositionToOffset(t *testing.T) {
+	t.Parallel()
+
+	text := "line1\nline2\nline3"
+
+	for line := range uint(2) {
+		for char := range uint(5) {
+			pos := types.Position{Line: line, Character: char}
+			exp := line*6 + char
+			got := util.SafeIntToUint(pos.ToOffset(text))
+
+			if exp != got {
+				t.Fatalf("expected offset for line %d char %d to be %d, got %d", line, char, exp, got)
+			}
+		}
+	}
+}
+
+func notifyDocumentChange(t *testing.T, connClient *jsonrpc2.Conn, fileURI, newContents string) {
 	t.Helper()
 
-	if requestData.URI != fileURI {
-		t.Log("expected diagnostics to be sent for", fileURI, "got", requestData.URI)
-
-		return false
+	err := connClient.Notify(t.Context(), "textDocument/didChange", types.DidChangeTextDocumentParams{
+		TextDocument:   types.VersionedTextDocumentIdentifier{URI: fileURI},
+		ContentChanges: []types.TextDocumentContentChangeEvent{{Text: newContents}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("failed to send didChange notification: %v", err)
 	}
+}
 
-	// Extract the codes from requestData.Items
-	requestCodes := make([]string, len(requestData.Items))
-	for i, item := range requestData.Items {
-		requestCodes[i] = item.Code
+// waitForViolations waits for violations to match the expected state.
+// wantPresent: violation codes that must be present in diagnostics
+// wantAbsent: violation codes that must be absent from diagnostics
+// Pass empty slices to check for no violations at all.
+func waitForViolations(
+	t *testing.T,
+	key string,
+	wantPresent,
+	wantAbsent []string,
+	timeout *time.Timer,
+	receivedMessages receivedMessagesMap,
+) {
+	t.Helper()
+
+	for success := false; !success; {
+		select {
+		case violations := <-receivedMessages[key]:
+			allMatch := true
+
+			t.Logf("Checking %s violations: %v", key, violations)
+
+			// Check all rules that should be present
+			for _, rule := range wantPresent {
+				if !slices.Contains(violations, rule) {
+					t.Logf("waiting for violations to contain %s", rule)
+
+					allMatch = false
+
+					break
+				}
+			}
+
+			if !allMatch {
+				continue
+			}
+
+			// Check all rules that should be absent
+			for _, rule := range wantAbsent {
+				if slices.Contains(violations, rule) {
+					t.Logf("waiting for violations to not contain %s", rule)
+
+					allMatch = false
+
+					break
+				}
+			}
+
+			if !allMatch {
+				continue
+			}
+
+			// If both slices are empty, check that violations is empty
+			if len(wantPresent) == 0 && len(wantAbsent) == 0 {
+				if len(violations) > 0 {
+					t.Logf("waiting for violations to be empty for %s, have: %v", key, violations)
+
+					continue
+				}
+			}
+
+			success = true
+		case <-timeout.C:
+			t.Fatalf("timed out waiting for violations - want present: %v, want absent: %v", wantPresent, wantAbsent)
+		}
 	}
-
-	// Sort both slices
-	slices.Sort(requestCodes)
-	slices.Sort(codes)
-
-	if !slices.Equal(requestCodes, codes) {
-		t.Logf("waiting for items: %v, got: %v", codes, requestCodes)
-
-		return false
-	}
-
-	t.Logf("got expected items")
-
-	return true
 }

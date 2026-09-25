@@ -42,67 +42,77 @@ import (
 
 // Linter stores data to use for linting.
 type Linter struct {
-	printHook            print.Hook
-	metrics              metrics.Metrics
-	inputModules         *rules.Input
-	userConfig           *config.Config
-	combinedCfg          *config.Config
-	pathPrefix           string
-	customRuleError      error
-	inputPaths           []string
-	ruleBundles          []*bundle.Bundle
-	disable              []string
-	disableCategory      []string
-	enable               []string
-	enableCategory       []string
-	ignoreFiles          []string
-	customRuleModules    []*ast.Module
-	overriddenAggregates ast.Object
-	useCollectQuery      bool
-	debugMode            bool
-	exportAggregates     bool
-	disableAll           bool
-	enableAll            bool
-	profiling            bool
-	instrumentation      bool
-	isPrepared           bool
+	printHook         print.Hook
+	metrics           metrics.Metrics
+	inputModules      *rules.Input
+	userConfig        *config.Config
+	combinedCfg       *config.Config
+	pathPrefix        string
+	customRuleError   error
+	inputPaths        []string
+	ruleBundles       []*bundle.Bundle
+	disable           []string
+	disableCategory   []string
+	enable            []string
+	enableCategory    []string
+	ignoreFiles       []string
+	customRuleModules []*ast.Module
+	useCollectQuery   bool
+	debugMode         bool
+	exportAggregates  bool
+	disableAll        bool
+	enableAll         bool
+	profiling         bool
+	instrumentation   bool
+	isPrepared        bool
 
 	preparedQuery *ogre.Query
 }
 
 var (
-	eqRef     = ast.RefTerm(ast.VarTerm(ast.Equality.Name))
+	eqVarValue      ast.Value = ast.Var("eq")
+	lintVarValue    ast.Value = ast.Var("lint")
+	enabledVarValue ast.Value = ast.Var("enabled")
+	eqNameVarTerm   *ast.Term = ast.NewTerm(eqVarValue)
+	lintVarTerm     *ast.Term = ast.NewTerm(lintVarValue)
+	enabledVarTerm  *ast.Term = ast.NewTerm(enabledVarValue)
+	eqRef                     = ast.RefTerm(eqNameVarTerm)
+
 	lintQuery = []*ast.Expr{{ // lint = data.regal.main.lint.
-		Terms: []*ast.Term{eqRef, ast.VarTerm("lint"), ast.RefTerm(
+		Terms: []*ast.Term{eqRef, lintVarTerm, {Value: ast.Ref{
 			ast.DefaultRootDocument,
 			ast.InternedTerm("regal"),
 			ast.InternedTerm("main"),
 			ast.InternedTerm("lint"),
-		)},
+		}}},
 	}}
 	enabledRulesQuery = []*ast.Expr{{ // enabled = data.regal.main.enabled_rules.
-		Terms: []*ast.Term{eqRef, ast.VarTerm("enabled"), ast.RefTerm(
+		Terms: []*ast.Term{eqRef, enabledVarTerm, {Value: ast.Ref{
 			ast.DefaultRootDocument,
 			ast.InternedTerm("regal"),
 			ast.InternedTerm("main"),
 			ast.InternedTerm("enabled_rules"),
-		)},
+		}}},
 	}}
 
-	aggregateRegalObject = ast.ObjectTerm(
-		ast.Item(ast.InternedTerm("operations"), ast.ArrayTerm(ast.InternedTerm("aggregate"))),
-		ast.Item(ast.InternedTerm("file"), ast.ObjectTerm(
-			ast.Item(ast.InternedTerm("name"), ast.InternedTerm("__aggregate_report__")),
-			ast.Item(ast.InternedTerm("lines"), ast.InternedEmptyArray),
-		)),
-	)
+	aggregateArray  = &ast.Term{Value: ast.NewArray(ast.InternedTerm("aggregate"))}
+	aggregateObject = &ast.Term{Value: ast.NewObject(
+		ast.Item(ast.InternedTerm("name"), ast.InternedTerm("__aggregate_report__")),
+		ast.Item(ast.InternedTerm("lines"), ast.InternedEmptyArray),
+	)}
+	aggregateRegalObject = &ast.Term{Value: ast.NewObject(
+		ast.Item(ast.InternedTerm("operations"), aggregateArray),
+		ast.Item(ast.InternedTerm("file"), aggregateObject),
+	)}
 
-	preparedPath = storage.Path{"internal", "prepared"}
+	internalPreparedNoticesPath = storage.Path{"internal", "prepared", "notices"}
+	preparedPath                = internalPreparedNoticesPath[:2]
 )
 
 func init() {
 	ast.InternStringTerm(
 		"eval", "disable_all", "disable_category", "disable", "enable_all", "enable_category", "enable", "ignore_files",
+		"aggregates_internal", "__aggregate_report__",
 	)
 }
 
@@ -307,15 +317,6 @@ func (l Linter) WithCollectQuery(enabled bool) Linter {
 	return l
 }
 
-// WithAggregates supplies aggregate data to a linter instance.
-// Likely generated in a previous run, and used to provide a global context to
-// a subsequent run of a single file lint.
-func (l Linter) WithAggregates(aggs ast.Object) Linter {
-	l.overriddenAggregates = aggs
-
-	return l
-}
-
 // Prepare stores linter preparation state, like the determined configuration,
 // and the query perpared for linting.
 // Experimental: while used internally, the details of what is prepared here
@@ -340,9 +341,11 @@ func (l Linter) Prepare(ctx context.Context) (Linter, error) {
 		l.printHook = topdown.NewPrintHook(os.Stderr)
 	}
 
+	ogreStore := ogre.NewStoreFromObject(ctx, l.prepareData(conf))
+
 	l.preparedQuery, err = ogre.New(lintQuery).
 		WithModules(l.customModulesMap()).
-		WithStore(ogre.NewStoreFromObject(ctx, l.prepareData(conf))).
+		WithStore(ogreStore).
 		WithMetrics(l.metrics).
 		WithPrintHook(l.printHook).
 		WithInstrumentation(l.instrumentation).
@@ -435,8 +438,7 @@ func (l Linter) Lint(ctx context.Context) (report.Report, error) {
 		l.stopTimer(regalmetrics.RegalFilterIgnoredModules)
 	}
 
-	hasAggregatesOverride := l.overriddenAggregates != nil && l.overriddenAggregates.Len() > 0
-	if len(l.inputPaths) == 0 && l.inputModules == nil && !hasAggregatesOverride {
+	if len(l.inputPaths) == 0 && l.inputModules == nil {
 		return report.Report{}, errors.New("nothing provided to lint")
 	}
 
@@ -445,23 +447,20 @@ func (l Linter) Lint(ctx context.Context) (report.Report, error) {
 		return report.Report{}, fmt.Errorf("failed to lint using Rego rules: %w", err)
 	}
 
-	var allAggregates ast.Object
-	if hasAggregatesOverride {
-		allAggregates = l.overriddenAggregates
-	} else if len(input.FileNames) > 1 {
-		allAggregates = regoReport.Aggregates
-	}
+	if len(input.FileNames) > 1 {
+		allAggregates := regoReport.Aggregates
 
-	if allAggregates != nil && allAggregates.Len() > 0 {
-		aggregateReport, err := l.lintWithAggregateRules(ctx, allAggregates, regoReport.IgnoreDirectives)
-		if err != nil {
-			return report.Report{}, fmt.Errorf("failed to lint using Rego aggregate rules: %w", err)
-		}
+		if allAggregates != nil && allAggregates.Len() > 0 {
+			aggregateReport, err := l.lintWithAggregateRules(ctx, allAggregates, regoReport.IgnoreDirectives)
+			if err != nil {
+				return report.Report{}, fmt.Errorf("failed to lint using Rego aggregate rules: %w", err)
+			}
 
-		regoReport.Violations = append(regoReport.Violations, aggregateReport.Violations...)
+			regoReport.Violations = append(regoReport.Violations, aggregateReport.Violations...)
 
-		if l.profiling {
-			regoReport.AggregateProfile = aggregateReport.AggregateProfile
+			if l.profiling {
+				regoReport.AggregateProfile = aggregateReport.AggregateProfile
+			}
 		}
 	}
 
@@ -496,20 +495,20 @@ func (l Linter) Lint(ctx context.Context) (report.Report, error) {
 // the supplied configuration. This makes use of the linter rule settings
 // to produce a single list of the rules that are to be run on this linter
 // instance.
-func (l Linter) DetermineEnabledRules(ctx context.Context) ([]string, []string, error) {
+func (l Linter) DetermineEnabledRules(ctx context.Context) ([]string, error) {
 	conf, err := l.GetConfig()
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to merge config: %w", err)
+		return nil, fmt.Errorf("failed to merge config: %w", err)
 	}
 
 	pq, err := ogre.New(enabledRulesQuery).
 		WithStore(ogre.NewStoreFromObject(ctx, l.prepareData(conf))).
 		Prepare(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed preparing query: %w", err)
+		return nil, fmt.Errorf("failed preparing query: %w", err)
 	}
 
-	var regular, aggregate []string
+	var ruleKeys []string
 
 	input := ast.InternedEmptyObject.Value
 
@@ -519,29 +518,16 @@ func (l Linter) DetermineEnabledRules(ctx context.Context) ([]string, []string, 
 			return errors.New("expected enabled rules object, didn't get it")
 		}
 
-		// Since we currently have no reliable way to determine whether a rule is an aggregate
-		// rule or not in Rego without actually evaluating it, we query the comiler for this
-		// information for each rule in the result. Long term, we should figure out the best way
-		// to do this in Rego only.
-		ref := ast.DefaultRootRef.Extend(ast.MustParseRef("regal.rules.category.title.aggregate"))
-
 		return enabled.Iter(func(category, rules *ast.Term) error {
 			categoryRules, ok := rules.Value.(ast.Object)
 			if !ok {
 				return fmt.Errorf("expected list of enabled rules for category %s, didn't get it", category)
 			}
 
-			ref[3] = category
-
 			for _, title := range categoryRules.Keys() {
-				ref[4] = title
 				titleStr, _ := title.Value.(ast.String)
 
-				if rules := pq.Compiler().GetRulesExact(ref); len(rules) == 0 {
-					regular = append(regular, string(titleStr))
-				} else {
-					aggregate = append(aggregate, string(titleStr))
-				}
+				ruleKeys = append(ruleKeys, string(titleStr))
 			}
 
 			return nil
@@ -549,10 +535,10 @@ func (l Linter) DetermineEnabledRules(ctx context.Context) ([]string, []string, 
 	})
 
 	if err = ex.Eval(ctx); err != nil {
-		return nil, nil, fmt.Errorf("failed to evaluate enabled rules query: %w", err)
+		return nil, fmt.Errorf("failed to evaluate enabled rules query: %w", err)
 	}
 
-	return util.Sorted(regular), util.Sorted(aggregate), nil
+	return outil.Sorted(ruleKeys), nil
 }
 
 // GetConfig returns the final configuration for the linter, i.e. Regal's default
@@ -567,24 +553,22 @@ func (l Linter) GetConfig() (*config.Config, error) {
 		return nil, fmt.Errorf("failed to read provided config: %w", err)
 	}
 
-	if l.debugMode {
-		bs, err := yaml.Marshal(mergedConf)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal config: %w", err)
-		}
+	mcPtr := &mergedConf
 
-		log.Println("merged provided and user config:\n", outil.ByteSliceToString(bs))
+	if l.debugMode {
+		w := log.Writer()
+		w.Write(outil.StringToByteSlice("merged provided and user config:\n"))
+		yaml.NewEncoder(w).Encode(mcPtr)
 	}
 
-	return &mergedConf, nil
+	return mcPtr, err
 }
 
 func (l Linter) countSkippedFromNotices(ctx context.Context, r report.Report) (report.Report, int) {
 	s := l.preparedQuery.Store()
-	p := storage.Path{"internal", "prepared", "notices"}
 
 	// Nesting galore. Any better way? A Rego transform would be nice.
-	if noticesAny, err := storage.ReadOne(ctx, s.Storage(), p); err == nil {
+	if noticesAny, err := storage.ReadOne(ctx, s.Storage(), internalPreparedNoticesPath); err == nil {
 		if categoriesObj, ok := noticesAny.(ast.Object); ok {
 			categoriesObj.Foreach(func(_, v *ast.Term) {
 				if noticesObj, ok := v.Value.(ast.Object); ok {
@@ -600,10 +584,7 @@ func (l Linter) countSkippedFromNotices(ctx context.Context, r report.Report) (r
 		}
 	}
 
-	slices.SortFunc(r.Notices, func(a, b report.Notice) int {
-		return strings.Compare(a.Title, b.Title)
-	})
-	r.Notices = slices.Compact(r.Notices)
+	r.Notices = slices.Compact(outil.SortedFunc(r.Notices, report.Notice.ByTitle))
 	rulesSkippedCounter := 0
 
 	for _, notice := range r.Notices {
@@ -647,10 +628,39 @@ func (l Linter) regoPrepare(ctx context.Context) error {
 				return errors.New("expected 'prepared' field in result object")
 			}
 
-			return util.WrapErr(
-				stg.Write(ctx, txn, storage.ReplaceOp, preparedPath, prep),
-				"failed to write prepared data to store",
-			)
+			// Ensure all intermediate path segments exist before writing the leaf.
+			// Sometimes these are missing at start up and we want to be reliable.
+			for i := 1; i < len(preparedPath); i++ {
+				prefix := preparedPath[:i]
+				if _, err := stg.Read(ctx, txn, prefix); err != nil {
+					stErr, ok := errors.AsType[*storage.Error](err)
+					if !ok || stErr.Code != storage.NotFoundErr {
+						return util.WrapErr(err, "failed to read intermediate path")
+					}
+
+					if err := stg.Write(ctx, txn, storage.AddOp, prefix, ast.ObjectTerm()); err != nil {
+						return util.WrapErr(err, "failed to create intermediate path")
+					}
+				}
+			}
+
+			// Replace if the leaf path exists, otherwise add it.
+			if _, err := stg.Read(ctx, txn, preparedPath); err == nil {
+				if err := stg.Write(ctx, txn, storage.ReplaceOp, preparedPath, prep); err != nil {
+					return util.WrapErr(err, "failed to replace prepared data in store")
+				}
+			} else {
+				stErr, ok := errors.AsType[*storage.Error](err)
+				if !ok || stErr.Code != storage.NotFoundErr {
+					return util.WrapErr(err, "failed to read prepared path")
+				}
+
+				if err := stg.Write(ctx, txn, storage.AddOp, preparedPath, prep); err != nil {
+					return util.WrapErr(err, "failed to add prepared data to store")
+				}
+			}
+
+			return nil
 		})
 
 	if err := ev.Eval(ctx); err != nil {
@@ -891,10 +901,13 @@ func (l Linter) lintWithAggregateRules(
 	defer cancel()
 
 	inputValue := ast.NewObject(
-		rast.Item("aggregates_internal", ast.NewTerm(cmp.Or(aggregates, intern.EmptyObject))),
 		rast.Item("ignore_directives", ast.NewTerm(cmp.Or(ignoreDirectives, intern.EmptyObject))),
 		rast.Item("regal", aggregateRegalObject),
 	)
+
+	if aggregates != nil && aggregates.Len() > 0 {
+		inputValue.Insert(ast.InternedTerm("aggregates_internal"), ast.NewTerm(aggregates))
+	}
 
 	var rep report.Report
 

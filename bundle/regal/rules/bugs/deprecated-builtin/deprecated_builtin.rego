@@ -1,5 +1,8 @@
 # METADATA
 # description: Avoid using deprecated built-in functions
+# related_resources:
+#   - description: documentation
+#     ref: https://www.openpolicyagent.org/projects/regal/rules/bugs/deprecated-builtin
 package regal.rules.bugs["deprecated-builtin"]
 
 import data.regal.ast
@@ -27,7 +30,7 @@ report contains violation if {
 	}
 
 	# bail out early if no the deprecated built-ins are in capabilities
-	util.intersects(object.keys(config.capabilities.builtins), deprecated_builtins)
+	util.intersects(config.builtin_names, deprecated_builtins)
 
 	call := ast.found.calls[_][_][0]
 

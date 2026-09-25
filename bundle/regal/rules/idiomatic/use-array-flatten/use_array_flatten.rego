@@ -1,5 +1,8 @@
 # METADATA
 # description: Prefer using `array.flatten` over nested `array.concat` calls
+# related_resources:
+#   - description: documentation
+#     ref: https://www.openpolicyagent.org/projects/regal/rules/idiomatic/use-array-flatten
 package regal.rules.idiomatic["use-array-flatten"]
 
 import data.regal.ast
@@ -11,7 +14,7 @@ import data.regal.result
 # custom:
 #   severity: none
 notices contains result.notice(rego.metadata.chain()) if {
-	not object.subset(object.keys(config.capabilities.builtins), {"array.flatten", "array.concat"})
+	not object.subset(config.builtin_names, {"array.flatten", "array.concat"})
 }
 
 report contains violation if {

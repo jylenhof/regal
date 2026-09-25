@@ -1,5 +1,8 @@
 # METADATA
 # description: Inconsistently named function arguments
+# related_resources:
+#   - description: documentation
+#     ref: https://www.openpolicyagent.org/projects/regal/rules/bugs/inconsistent-args
 package regal.rules.bugs["inconsistent-args"]
 
 import data.regal.ast
@@ -47,7 +50,7 @@ _inconsistent_args(position) if {
 	named_vars := {arg.value |
 		some arg in position
 		arg.type == "var"
-		not ast.is_wildcard(arg)
+		not startswith(arg.value, "$")
 	}
 	count(named_vars) > 1
 }

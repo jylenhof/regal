@@ -2900,8 +2900,16 @@
         ],
         "result": {
           "description": "remaining data from `object` with only keys specified in `paths`",
+          "dynamic": {
+            "key": {
+              "type": "any"
+            },
+            "value": {
+              "type": "any"
+            }
+          },
           "name": "filtered",
-          "type": "any"
+          "type": "object"
         },
         "type": "function"
       }
@@ -3007,7 +3015,7 @@
     },
     {
       "name": "json.match_schema",
-      "description": "Checks that the document matches the JSON schema.",
+      "description": "Checks that the document matches the JSON schema. The `pattern` keyword is enforced using Go's RE2 regex dialect; schemas relying on ECMA-262 features that RE2 does not support (e.g. negative lookahead) will be rejected.",
       "categories": [
         "object"
       ],
@@ -3218,8 +3226,16 @@
         ],
         "result": {
           "description": "result of removing all keys specified in `paths`",
+          "dynamic": {
+            "key": {
+              "type": "any"
+            },
+            "value": {
+              "type": "any"
+            }
+          },
           "name": "output",
-          "type": "any"
+          "type": "object"
         },
         "type": "function"
       }
@@ -3248,7 +3264,7 @@
     },
     {
       "name": "json.verify_schema",
-      "description": "Checks that the input is a valid JSON schema object. The schema can be either a JSON string or an JSON object.",
+      "description": "Checks that the input is a valid JSON schema object. The schema can be either a JSON string or an JSON object. The `pattern` keyword, if present, is compiled using Go's RE2 regex dialect; schemas relying on ECMA-262 features that RE2 does not support (e.g. negative lookahead) will be rejected.",
       "categories": [
         "object"
       ],
@@ -3993,8 +4009,16 @@
         ],
         "result": {
           "description": "remaining data from `object` with only keys specified in `keys`",
+          "dynamic": {
+            "key": {
+              "type": "any"
+            },
+            "value": {
+              "type": "any"
+            }
+          },
           "name": "filtered",
-          "type": "any"
+          "type": "object"
         },
         "type": "function"
       }
@@ -4117,8 +4141,16 @@
         ],
         "result": {
           "description": "result of removing the specified `keys` from `object`",
+          "dynamic": {
+            "key": {
+              "type": "any"
+            },
+            "value": {
+              "type": "any"
+            }
+          },
           "name": "output",
-          "type": "any"
+          "type": "object"
         },
         "type": "function"
       }
@@ -4190,9 +4222,9 @@
           }
         ],
         "result": {
-          "description": "`true` if `sub` is a subset of `super`",
+          "description": "`true` if `sub` is a subset of `super`, otherwise undefined",
           "name": "result",
-          "type": "any"
+          "type": "boolean"
         },
         "type": "function"
       }
@@ -4231,8 +4263,16 @@
         ],
         "result": {
           "description": "a new object which is the result of an asymmetric recursive union of two objects where conflicts are resolved by choosing the key from the right-hand object `b`",
+          "dynamic": {
+            "key": {
+              "type": "any"
+            },
+            "value": {
+              "type": "any"
+            }
+          },
           "name": "output",
-          "type": "any"
+          "type": "object"
         },
         "type": "function"
       }
@@ -4261,8 +4301,16 @@
         ],
         "result": {
           "description": "asymmetric recursive union of all objects in `objects`, merged from left to right, where conflicts are resolved by choosing the key from the right-hand object",
+          "dynamic": {
+            "key": {
+              "type": "any"
+            },
+            "value": {
+              "type": "any"
+            }
+          },
           "name": "output",
-          "type": "any"
+          "type": "object"
         },
         "type": "function"
       }
@@ -4769,7 +4817,7 @@
     },
     {
       "name": "regex.template_match",
-      "description": "Matches a string against a pattern, where there pattern may be glob-like",
+      "description": "Matches a string against a pattern, where the pattern may be glob-like",
       "decl": {
         "args": [
           {
@@ -5375,6 +5423,41 @@
       }
     },
     {
+      "name": "strings.split_n",
+      "description": "Returns an array of at most `n` parts of `x` split on `delimiter`. If `n` is positive, returns the first `n` parts. If `n` is negative, returns the last `abs(n)` parts. If `n` is zero, returns an empty array. If `abs(n)` exceeds the number of parts, all parts are returned.",
+      "categories": [
+        "strings"
+      ],
+      "decl": {
+        "args": [
+          {
+            "description": "string that is split",
+            "name": "x",
+            "type": "string"
+          },
+          {
+            "description": "delimiter used for splitting",
+            "name": "delimiter",
+            "type": "string"
+          },
+          {
+            "description": "number of parts to return; positive selects from the left, negative from the right, zero returns an empty array",
+            "name": "n",
+            "type": "number"
+          }
+        ],
+        "result": {
+          "description": "split parts",
+          "dynamic": {
+            "type": "string"
+          },
+          "name": "ys",
+          "type": "array"
+        },
+        "type": "function"
+      }
+    },
+    {
       "name": "substring",
       "description": "Returns the  portion of a string for a given `offset` and a `length`.  If `length \u003c 0`, `output` is the remainder of the string.",
       "categories": [
@@ -5712,7 +5795,7 @@
       "decl": {
         "args": [
           {
-            "description": "a duration like \"3m\"; see the [Go `time` package documentation](https://golang.org/pkg/time/#ParseDuration) for more details",
+            "description": "a duration like \"3m\"; see the [OPA `Duration Parsing` documentation](https://www.openpolicyagent.org/docs/latest/policy-reference/builtins/time#duration-parsing) for more details",
             "name": "duration",
             "type": "string"
           }
@@ -5805,7 +5888,7 @@
     },
     {
       "name": "to_number",
-      "description": "Converts a string, bool, or number value to a number: Strings are converted to numbers using `strconv.Atoi`, Boolean `false` is converted to 0 and `true` is converted to 1.",
+      "description": "Converts value of type string, null or boolean to number. Numeric strings converts to the corresponding number when possible. Null and boolean `false` converts to 0 and boolean `true` to 1. Numbers are returned without conversion.",
       "categories": [
         "conversions"
       ],
@@ -5813,7 +5896,7 @@
         "args": [
           {
             "description": "value to convert",
-            "name": "x",
+            "name": "value",
             "of": [
               {
                 "type": "null"
@@ -5832,7 +5915,7 @@
           }
         ],
         "result": {
-          "description": "the numeric representation of `x`",
+          "description": "the numeric representation of `value`",
           "name": "num",
           "type": "number"
         },
@@ -6132,6 +6215,52 @@
       }
     },
     {
+      "name": "uri.is_valid",
+      "description": "Returns true if the input can be parsed as a URI.",
+      "decl": {
+        "args": [
+          {
+            "description": "the URI string to validate",
+            "name": "uri",
+            "type": "string"
+          }
+        ],
+        "result": {
+          "description": "true if `uri` is a valid URI, false otherwise",
+          "name": "result",
+          "type": "boolean"
+        },
+        "type": "function"
+      }
+    },
+    {
+      "name": "uri.parse",
+      "description": "Parses a URI and returns an object containing its components according to RFC 3986. Empty components are omitted. In addition to the standard components, `raw_query` is returned for use with `urlquery` builtins, and `raw_path` is returned to allow detection of path-based exploits using percent-encoded characters.",
+      "decl": {
+        "args": [
+          {
+            "description": "the URI string to parse",
+            "name": "uri",
+            "type": "string"
+          }
+        ],
+        "result": {
+          "description": "object containing URI components",
+          "dynamic": {
+            "key": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "name": "output",
+          "type": "object"
+        },
+        "type": "function"
+      }
+    },
+    {
       "name": "urlquery.decode",
       "description": "Decodes a URL-encoded input string.",
       "categories": [
@@ -6402,6 +6531,11 @@
         "type": "function"
       }
     }
+  ],
+  "future_keywords": [
+    "and",
+    "not",
+    "or"
   ],
   "features": [
     "keywords_in_refs",

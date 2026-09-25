@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -113,6 +114,8 @@ func init() {
 			return nil
 		},
 		RunE: wrapProfiling(func(args []string) error {
+			relaxGC()
+
 			rep, err := lint(args, params)
 			if err != nil {
 				log.SetOutput(os.Stderr)
@@ -171,6 +174,10 @@ func init() {
 }
 
 func lint(args []string, params *lintParams) (result report.Report, err error) {
+	if params.profile && params.format != formatJSON {
+		return report.Report{}, errors.New("--profile requires --format json to display profiling data")
+	}
+
 	ctx, cancel := getLinterContext(params.lintAndFixParams)
 	defer cancel()
 
@@ -275,7 +282,10 @@ func updateCheckAndWarn(params *lintParams, regalRules *bundle.Bundle, userConfi
 
 	if mergedConfig.Features.Remote.CheckVersion &&
 		os.Getenv(update.CheckVersionDisableEnvVar) == "" {
-		update.CheckAndWarn(update.Options{
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer cancel()
+
+		update.CheckAndWarn(ctx, update.Options{
 			CurrentVersion: version.Version,
 			CurrentTime:    time.Now().UTC(),
 			Debug:          params.debug,

@@ -1,5 +1,8 @@
 # METADATA
 # description: Prefer using `object.union_n` over nested `object.union` calls
+# related_resources:
+#   - description: documentation
+#     ref: https://www.openpolicyagent.org/projects/regal/rules/idiomatic/use-object-union-n
 package regal.rules.idiomatic["use-object-union-n"]
 
 import data.regal.ast
@@ -11,7 +14,7 @@ import data.regal.result
 # custom:
 #   severity: none
 notices contains result.notice(rego.metadata.chain()) if {
-	not object.subset(object.keys(config.capabilities.builtins), {"object.union", "object.union_n"})
+	not object.subset(config.builtin_names, {"object.union", "object.union_n"})
 }
 
 report contains violation if {

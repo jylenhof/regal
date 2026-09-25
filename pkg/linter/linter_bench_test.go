@@ -1,4 +1,4 @@
-package linter
+package linter_test
 
 import (
 	"path/filepath"
@@ -8,7 +8,9 @@ import (
 	"github.com/open-policy-agent/regal/internal/test/must"
 	"github.com/open-policy-agent/regal/internal/testutil"
 	"github.com/open-policy-agent/regal/pkg/config"
+	regal "github.com/open-policy-agent/regal/pkg/linter"
 	"github.com/open-policy-agent/regal/pkg/report"
+	"github.com/open-policy-agent/regal/pkg/reporter"
 )
 
 // 736486708 ns/op	2348230496 B/op	51198148 allocs/op // OPA v1.12.2
@@ -16,7 +18,7 @@ import (
 // 461607500 ns/op	1543793525 B/op	36938279 allocs/op // Performance refactor + follow-up
 func BenchmarkRegalLintingItself(b *testing.B) {
 	for b.Loop() {
-		linter := NewLinter().
+		linter := regal.NewLinter().
 			WithInputPaths([]string{"../../bundle"}).
 			WithUserConfig(must.Return(config.FromPath(filepath.Join("..", "..", ".regal", "config.yaml")))(b))
 
@@ -31,15 +33,22 @@ func BenchmarkRegalLintingItself(b *testing.B) {
 // 420959403 ns/op	1534395760 B/op	36917131 allocs/op // Performance refactor
 // 403029542 ns/op	1494994832 B/op	35884349 allocs/op // Performance refactor follow-up
 // 403083139 ns/op	1520423272 B/op	36511766 allocs/op // 3 new rules added
-//
-// 339462153 ns/op	1128242546 B/op	32027363 allocs/op // opa main
+// 350271889 ns/op	1180526954 B/op	33308189 allocs/op // 2 new rules added
+// 371014222 ns/op	1246251634 B/op	35248709 allocs/op // Lots of new Rego code (to lint) added
+// 370440556 ns/op	1247207368 B/op	35345393 allocs/op // ... some time later ...
+// 367091361 ns/op	1236597106 B/op	34901438 allocs/op // Unified aggregates
+// 364328681 ns/op	1212708122 B/op	33820873 allocs/op // Ridiculous _ = value.terms hack
+// 404955889 ns/op	1305418672 B/op	35569623 allocs/op // Future and/or introduced
+// 397163042 ns/op	1306646109 B/op	35574049 allocs/op // OPA v1.20.1
+// 376966625 ns/op	1251852949 B/op	34368833 allocs/op // OPA perf PRs merged
 func BenchmarkRegalLintingItselfPrepareOnce(b *testing.B) {
 	benchmarkLint(b, bundleLinter(b, true).MustPrepare(b.Context()))
 }
 
 // 65815866 ns/op   43852693 B/op    1025467 allocs/op // OPA v1.10.0
 // 64977849 ns/op   38570571 B/op     932404 allocs/op // OPA v1.12.2
-// 61936272 ns/op	38191932 B/op	  921084 allocs/op // OPA v1.13.1
+// 61936272 ns/op   38191932 B/op     921084 allocs/op // OPA v1.13.1
+// 75080301 ns/op   47586984 B/op    1064790 allocs/op // OPA v1.20.1
 func BenchmarkOnlyPrepare(b *testing.B) {
 	linter := bundleLinter(b, true)
 	for b.Loop() {
@@ -50,6 +59,7 @@ func BenchmarkOnlyPrepare(b *testing.B) {
 // 127396828 ns/op	300739526 B/op	 5938689 allocs/op // OPA v1.10.0
 // 123784616 ns/op	284724624 B/op	 5918990 allocs/op // OPA v1.12.2
 // _95888368 ns/op	156125725 B/op	 3331213 allocs/op // With Rego prepare eval phase (!!!)
+// 127176516 ns/op	248721019 B/op	 5151370 allocs/op // OPA v1.20.1
 func BenchmarkRegalNoEnabledRules(b *testing.B) {
 	benchmarkLint(b, bundleLinter(b, false).WithDisableAll(true))
 }
@@ -82,10 +92,10 @@ func BenchmarkEachRule(b *testing.B) {
 	}
 }
 
-func bundleLinter(b *testing.B, withConfig bool) Linter {
+func bundleLinter(b *testing.B, withConfig bool) regal.Linter {
 	b.Helper()
 
-	linter := NewLinter().WithInputPaths([]string{"../../bundle"})
+	linter := regal.NewLinter().WithInputPaths([]string{"../../bundle"})
 
 	if withConfig {
 		config := must.Return(config.FromPath(filepath.Join("..", "..", ".regal", "config.yaml")))(b)
@@ -95,13 +105,17 @@ func bundleLinter(b *testing.B, withConfig bool) Linter {
 	return linter
 }
 
-func benchmarkLint(b *testing.B, linter Linter) {
+func benchmarkLint(b *testing.B, l regal.Linter) {
 	b.Helper()
 
 	var rep report.Report
 	for b.Loop() {
-		rep = must.Return(linter.Lint(b.Context()))(b)
+		rep = must.Return(l.Lint(b.Context()))(b)
 	}
 
-	testutil.AssertNumViolations(b, 0, rep)
+	if len(rep.Violations) > 0 {
+		_ = reporter.NewCompactReporter(b.Output()).Publish(b.Context(), rep)
+
+		b.Fatalf("Expected no violations, but got %d", len(rep.Violations))
+	}
 }

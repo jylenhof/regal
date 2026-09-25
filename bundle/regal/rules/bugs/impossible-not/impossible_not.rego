@@ -1,5 +1,8 @@
 # METADATA
 # description: Impossible `not` condition
+# related_resources:
+#   - description: documentation
+#     ref: https://www.openpolicyagent.org/projects/regal/rules/bugs/impossible-not
 package regal.rules.bugs["impossible-not"]
 
 import data.regal.ast
@@ -12,7 +15,7 @@ _package_path := [term.value | some term in input.package.path]
 _multivalue_rules contains path if {
 	some rule in ast.rules
 
-	rule.head.key
+	_ = rule.head.key
 	not rule.head.value
 
 	# ignore general ref head rules for now
@@ -38,7 +41,7 @@ _negated_refs contains negated_ref if {
 		path.type == "string"
 	}
 
-	rule := input.rules[to_number(rule_index)]
+	rule := input.rules[rule_index]
 	ref_head := ref[0]
 
 	# ignore negated local vars

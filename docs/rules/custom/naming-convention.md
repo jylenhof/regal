@@ -19,9 +19,9 @@ Regal can enforce naming conventions for:
 
 ## Configuration Options
 
-This linter rule provides the following configuration options:
+This linter rule provides the following [configuration options](https://www.openpolicyagent.org/projects/regal/configuration):
 
-```yaml
+```yaml title=".regal/config.yaml or .regal.yaml"
 rules:
   custom:
     naming-convention:
@@ -32,18 +32,27 @@ rules:
       # one of "error", "warning", "ignore"
       level: error
       conventions:
-          # allow only "private" rules and functions, i.e. those starting with
-          # underscore, or rules named "deny" or "allow"
-        - pattern: '^_[a-z]+$|^deny$|^allow$'
+        # allow only "private" rules and functions, i.e. those starting with
+        # underscore, or rules named "deny" or "allow"
+        - pattern: "^_[a-z]+$|^deny$|^allow$"
           # one of "package", "rule", "function", "variable"
           targets:
             - rule
             - function
         # any number of naming rules may be added
         # package names must start with "acmecorp" or "system"
-        - pattern: '^acmecorp|^system'
+        - pattern: "^acmecorp|^system"
           targets:
             - package
+        # a list of names may be provided in addition to a pattern
+        # if both a pattern and a list of names are provided, identifiers
+        # must match either the pattern or one of the names in the list
+        - names:
+            - i
+            - j
+            - k
+          targets:
+            - var
 ```
 
 **Note:** In order to avoid characters accidentally getting escaped, always use single quotes to encode your regex

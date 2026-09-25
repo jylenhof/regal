@@ -1,9 +1,12 @@
 # METADATA
 # description: Mismatch in `sprintf` arguments count
+# related_resources:
+#   - description: documentation
+#     ref: https://www.openpolicyagent.org/projects/regal/rules/bugs/sprintf-arguments-mismatch
 package regal.rules.bugs["sprintf-arguments-mismatch"]
 
 import data.regal.ast
-import data.regal.config
+import data.regal.capabilities
 import data.regal.result
 import data.regal.util
 
@@ -11,7 +14,7 @@ import data.regal.util
 # description: Missing capability for built-in `sprintf`
 # custom:
 #   severity: none
-notices contains result.notice(rego.metadata.chain()) if not "sprintf" in object.keys(config.capabilities.builtins)
+notices contains result.notice(rego.metadata.chain()) if not capabilities.has_sprintf
 
 # METADATA
 # description: |

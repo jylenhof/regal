@@ -4,10 +4,9 @@ package regal.lsp.completion.providers.rulerefs
 
 import data.regal.ast
 
+import data.regal.lsp.client
 import data.regal.lsp.completion.kind
-import data.regal.lsp.completion.location
-
-_ref_is_internal(ref) if contains(ref, "._")
+import data.regal.lsp.location
 
 _line := input.regal.file.lines[input.params.position.line]
 
@@ -18,12 +17,10 @@ _workspace_rule_refs contains ref if {
 	some ref in refs
 }
 
-_parsed_current_file := data.workspace.parsed[input.params.textDocument.uri]
-
-_current_file_package := ast.ref_to_string(_parsed_current_file.package.path)
+_current_file_package := ast.ref_to_string(data.workspace.parsed[input.params.textDocument.uri].package.path)
 
 _current_file_imports contains ref if {
-	some imp in _parsed_current_file.imports
+	some imp in data.workspace.parsed[input.params.textDocument.uri].imports
 
 	ref := ast.ref_to_string(imp.path.value)
 }
@@ -37,7 +34,7 @@ _current_package_refs contains ref if {
 _imported_package_refs contains ref if {
 	some ref in _workspace_rule_refs
 
-	not _ref_is_internal(ref)
+	not contains(ref, "._")
 
 	strings.any_prefix_match(ref, _current_file_imports)
 }
@@ -48,7 +45,7 @@ _other_package_refs contains ref if {
 	not ref in _imported_package_refs
 	not ref in _current_package_refs
 
-	not _ref_is_internal(ref)
+	not contains(ref, "._")
 }
 
 # from the current package
@@ -92,8 +89,12 @@ _matching_rule_ref_suggestions contains ref if {
 }
 
 # METADATA
-# description: set of completion suggestions for references to rules
+# description: set of completion suggestions for references to rules (no edit range defaults support)
 items contains item if {
+	not _default_edit_range_supported
+
+	range := location.word_range(_word, input.params.position)
+
 	some ref in _matching_rule_ref_suggestions
 
 	item := {
@@ -101,8 +102,26 @@ items contains item if {
 		"kind": kind.variable,
 		"detail": "reference",
 		"textEdit": {
-			"range": location.word_range(_word, input.params.position),
+			"range": range,
 			"newText": ref,
 		},
 	}
+}
+
+# METADATA
+# description: with editRange item defaults (range defined in main, label used as textEdit.newText))
+items contains item if {
+	_default_edit_range_supported
+
+	some ref in _matching_rule_ref_suggestions
+
+	item := {
+		"label": ref,
+		"kind": kind.variable,
+		"detail": "reference",
+	}
+}
+
+_default_edit_range_supported if {
+	"editRange" in client.capabilities.textDocument.completion.completionList.itemDefaults
 }

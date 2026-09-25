@@ -80,9 +80,9 @@ will be improved in future releases.
 
 ## Configuration Options
 
-This linter rule provides the following configuration options:
+This linter rule provides the following [configuration options](https://www.openpolicyagent.org/projects/regal/configuration):
 
-```yaml
+```yaml title=".regal/config.yaml or .regal.yaml"
 rules:
   idiomatic:
     equals-pattern-matching:
@@ -92,5 +92,5 @@ rules:
 
 ## Related Resources
 
-- Styra Blog: [How to express OR in Rego](https://www.styra.com/blog/how-to-express-or-in-rego/)
+- Styra Blog: [How to express OR in Rego](https://web.archive.org/web/https://www.styra.com/blog/how-to-express-or-in-rego/)
 - GitHub: [Source Code](https://github.com/open-policy-agent/regal/blob/main/bundle/regal/rules/idiomatic/equals-pattern-matching/equals_pattern_matching.rego)

@@ -15,9 +15,10 @@ import (
 	"github.com/open-policy-agent/opa/v1/ast"
 
 	"github.com/open-policy-agent/regal/internal/lsp/clients"
-	"github.com/open-policy-agent/regal/internal/lsp/log"
+	"github.com/open-policy-agent/regal/internal/lsp/test"
 	"github.com/open-policy-agent/regal/internal/lsp/types"
 	"github.com/open-policy-agent/regal/internal/lsp/uri"
+	"github.com/open-policy-agent/regal/internal/lsp/workspace"
 	"github.com/open-policy-agent/regal/internal/test/assert"
 	"github.com/open-policy-agent/regal/internal/test/must"
 	"github.com/open-policy-agent/regal/internal/testutil"
@@ -112,11 +113,11 @@ func TestTemplateContentsForFile(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			lg := log.NewLogger(log.LevelDebug, t.Output())
 			td := testutil.TempDirectoryOf(t, tc.DiskContents)
-			ls := NewLanguageServer(t.Context(), &LanguageServerOptions{Logger: lg})
+			ls := NewLanguageServer(t.Context(), &LanguageServerOptions{Logger: test.DebugLogger(t)})
 
-			ls.workspaceRootURI = uri.FromPath(clients.IdentifierGeneric, td)
+			wsRootURI := uri.FromPath(clients.IdentifierGeneric, td)
+			ls.workspace = workspace.New(wsRootURI)
 			ls.loadedConfigAllRegoVersions = tc.ServerAllRegoVersions
 
 			fileURI := uri.FromPath(clients.IdentifierGeneric, filepath.Join(td, tc.FileKey))
@@ -141,9 +142,10 @@ func TestTemplateContentsForFileInWorkspaceRoot(t *testing.T) {
 	t.Parallel()
 
 	td := testutil.TempDirectoryOf(t, map[string]string{".regal/config.yaml": ""})
-	ls := NewLanguageServer(t.Context(), &LanguageServerOptions{Logger: log.NewLogger(log.LevelDebug, t.Output())})
+	ls := NewLanguageServer(t.Context(), &LanguageServerOptions{Logger: test.DebugLogger(t)})
 
-	ls.workspaceRootURI = uri.FromPath(clients.IdentifierGeneric, td)
+	workspaceRootURI := uri.FromPath(clients.IdentifierGeneric, td)
+	ls.workspace = workspace.New(workspaceRootURI)
 
 	fileURI := uri.FromPath(clients.IdentifierGeneric, filepath.Join(td, "foo.rego"))
 
@@ -158,10 +160,10 @@ func TestTemplateContentsForFileWithUnknownRoot(t *testing.T) {
 	t.Parallel()
 
 	td := t.TempDir()
-	ls := NewLanguageServer(t.Context(), &LanguageServerOptions{Logger: log.NewLogger(log.LevelDebug, t.Output())})
+	ls := NewLanguageServer(t.Context(), &LanguageServerOptions{Logger: test.DebugLogger(t)})
 	fileURI := uri.FromPath(clients.IdentifierGeneric, filepath.Join(td, "foo", "bar.rego"))
 
-	ls.workspaceRootURI = uri.FromPath(clients.IdentifierGeneric, td)
+	ls.workspace = workspace.New(uri.FromPath(clients.IdentifierGeneric, td))
 	ls.cache.SetFileContents(fileURI, "")
 
 	must.MkdirAll(t, td, "foo")
@@ -189,26 +191,34 @@ func TestNewFileTemplating(t *testing.T) {
 
 	tempDir := testutil.TempDirectoryOf(t, files)
 
-	// set up the server and client connections
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
 	receivedMessages := make(chan message, 10)
-	ls, connClient := createAndInitServer(t, ctx, tempDir, createTemplateTestClientHandler(t, receivedMessages))
+	ls, connClient, ctx := createAndInitServer(t, tempDir, createTemplateTestClientHandler(t, receivedMessages))
 
-	go ls.StartTemplateWorker(ctx)
+	ls.StartConfigWorker(ctx)
 
-	// wait for the server to load it's config
+	// TODO: In an ideal world, we would be able to start with other workers,
+	// but there are some tests that test this functionality in detail and they
+	// do not want this running by default.
+	ls.StartTemplateWorker(ctx)
+
+	// Wait for the custom config to load. We check that directory-package-mismatch has
+	// level "error" (set in the test config) to ensure the custom config is loaded before
+	// the template worker processes the file, ensuring it generates the expected rename operations.
 	timeout := time.NewTimer(determineTimeout())
 	select {
 	case <-timeout.C:
-		t.Fatalf("timed out waiting for server to load config")
+		t.Fatal("timed out waiting for server to load config")
 	default:
 		for {
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(testPollInterval)
 
-			if ls.getLoadedConfig() != nil {
-				break
+			cfg := ls.getLoadedConfig()
+			if cfg != nil {
+				if rule, ok := cfg.Rules["idiomatic"]["directory-package-mismatch"]; ok && rule.Level == "error" {
+					if exclude, ok := rule.Extra["exclude-test-suffix"].(bool); ok && !exclude {
+						break
+					}
+				}
 			}
 		}
 	}
@@ -264,11 +274,7 @@ func TestNewFileTemplating(t *testing.T) {
       {
         "kind": "rename",
         "newUri": "%[2]s",
-        "oldUri": "%[1]s",
-        "options": {
-          "ignoreIfExists": false,
-          "overwrite": false
-        }
+        "oldUri": "%[1]s"
       },
       {
         "kind": "delete",
@@ -316,25 +322,25 @@ func TestNewFileTemplating(t *testing.T) {
 			success = allLinesMatch
 		case <-timeout.C:
 			t.Log("never received expected message", expectedMessage)
-			t.Fatalf("timed out waiting for expected message to be sent")
+			t.Fatal("timed out waiting for expected message to be sent")
 		}
 	}
 }
 
-// TestTemplateWorkerRaceConditionWithDidOpen tests the race condition fix for
+// TestTemplateWorkerSkipsDidOpenWhenTemplating tests the race condition fix for
 // https://github.com/open-policy-agent/regal/issues/1608 where didOpen would overwrite
 // templated content in cache (with "") before the template worker could
 // complete.
-func TestTemplateWorkerRaceConditionWithDidOpen(t *testing.T) {
+func TestTemplateWorkerSkipsDidOpenWhenTemplating(t *testing.T) {
 	t.Parallel()
 
-	// set up the server and client connections
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	receivedMessages := make(chan message, 10)
+	receivedMessages := receivedMessagesMap{"policy.rego": make(chan []string, 10)}
 	tempDir := testutil.TempDirectoryOf(t, map[string]string{".regal/config.yaml": `{}`})
-	ls, connClient := createAndInitServer(t, ctx, tempDir, createTemplateTestClientHandler(t, receivedMessages))
+	clientHandler := createPublishDiagnosticsHandler(t, test.DebugLogger(t), receivedMessages)
+	ls, connClient, ctx := createAndInitServer(t, tempDir, clientHandler)
+
+	// note that the template worker is not started, we simulate it's running
+	// manually in this test.
 
 	newFilePath := filepath.Join(tempDir, "foo", "bar", "policy.rego")
 	newFileURI := uri.FromPath(clients.IdentifierGeneric, newFilePath)
@@ -342,115 +348,90 @@ func TestTemplateWorkerRaceConditionWithDidOpen(t *testing.T) {
 	must.MkdirAll(t, filepath.Dir(newFilePath))
 	must.WriteFile(t, newFilePath, []byte(""))
 
-	// create a 'manual' worker so we can time events to recreated the race.
-	templateCompleted := make(chan bool, 1)
-	proceedWithTemplating := make(chan bool, 1)
-
-	go func() {
-		job := <-ls.templateFileJobs
-		t.Log("controlled template worker received job:", job.URI)
-
-		ls.templatingFiles.Set(job.URI, true)
-		t.Log("marked file as being templated")
-
-		<-proceedWithTemplating
-		t.Log("proceeding with templating...")
-
-		templateContent := "package foo.bar\n\n"
-		ls.cache.SetFileContents(job.URI, templateContent)
-		t.Log("set templated content in cache")
-
-		ls.templatingFiles.Delete(job.URI)
-		t.Log("template worker completed - cleared templating flag")
-
-		templateCompleted <- true
-	}()
-
-	// 1: send didCreateFiles to trigger templating
-	if err := connClient.Notify(ctx, "workspace/didCreateFiles", types.CreateFilesParams{
-		Files: []types.File{{URI: newFileURI}},
-	}, nil); err != nil {
-		t.Fatalf("failed to send didCreateFiles notification: %s", err)
-	}
-
-	// wait for lock to be set, the lock is set quickly, but we want reliable tests
-	// so we make sure that the lock is set before proceeding
+	// Wait for server initialization to complete
 	timeout := time.NewTimer(determineTimeout())
 	select {
 	case <-timeout.C:
-		t.Fatalf("timed out waiting for lock to  be set")
+		t.Fatal("timed out waiting for server to initialize")
 	default:
 		for {
-			isLocked, ok := ls.templatingFiles.Get(newFileURI)
-			if !ok {
-				t.Log("expected file to be locked for templating")
-			}
+			time.Sleep(testPollInterval)
 
-			if isLocked {
+			if ls.getLoadedConfig() != nil {
 				break
 			}
 		}
 	}
 
-	// 2: send the didOpen notification while templating is in progress
+	// Set initial cache content so linting can proceed
+	initialContent := "package foo.bar\n\ninitial := true\n"
+	ls.cache.SetFileContents(newFileURI, initialContent)
+
+	// Simulate templating in progress
+	ls.templatingFiles.Set(newFileURI, true)
+
+	// Send didOpen while "templating" - should be skipped
 	if err := connClient.Notify(ctx, "textDocument/didOpen", types.DidOpenTextDocumentParams{
 		TextDocument: types.TextDocumentItem{
 			URI:        newFileURI,
 			LanguageID: "rego",
 			Version:    1,
-			Text:       "", // the file is empty in the editor
+			Text:       "",
 		},
 	}, nil); err != nil {
 		t.Fatalf("failed to send didOpen notification: %s", err)
 	}
 
-	// 3: allow templating to continue.
-	proceedWithTemplating <- true
+	// Wait for didOpen to complete
+	timeout = time.NewTimer(determineTimeout())
+	waitForViolations(t, "policy.rego", []string{}, []string{}, timeout, receivedMessages)
 
-	<-templateCompleted
+	// Drain any additional pending diagnostics messages from workspace linting
+	// to avoid race condition where buffered messages from first didOpen are
+	// consumed by the second waitForViolations call
+	drainMessages(receivedMessages["policy.rego"])
 
+	// Cache should still have initial content because didOpen was skipped
 	cacheContent := testutil.MustBeOK(ls.cache.GetFileContents(newFileURI))(t)
-	expectedTemplateContent := "package foo.bar\n\n"
-
-	if cacheContent != expectedTemplateContent {
-		t.Fatalf("race condition occurred! Expected cache to contain %q, got %q. "+
-			"didOpen overwrote templated content.", expectedTemplateContent, cacheContent)
+	if cacheContent != initialContent {
+		t.Fatalf("didOpen should have been skipped but cache changed from %q to %q", initialContent, cacheContent)
 	}
 
-	// 4: check that the didOpen now works again after the lock is off
+	// Simulate template worker completing
+	expectedTemplateContent := "package foo.bar\n\n"
+	ls.cache.SetFileContents(newFileURI, expectedTemplateContent)
+	ls.templatingFiles.Delete(newFileURI)
+
+	// Verify templated content is preserved
+	cacheContent = testutil.MustBeOK(ls.cache.GetFileContents(newFileURI))(t)
+	if cacheContent != expectedTemplateContent {
+		t.Fatalf("expected cache to contain %q, got %q", expectedTemplateContent, cacheContent)
+	}
+
+	// Now didOpen should work normally
+	newContent := "package foo.bar\n\nimport rego.v1\n"
 	if err := connClient.Notify(ctx, "textDocument/didOpen", types.DidOpenTextDocumentParams{
 		TextDocument: types.TextDocumentItem{
 			URI:        newFileURI,
 			LanguageID: "rego",
 			Version:    2,
-			Text:       "package foo.bar\n\nimport rego.v1\n", // file has some content now
+			Text:       newContent,
 		},
 	}, nil); err != nil {
 		t.Fatalf("failed to send second didOpen notification: %s", err)
 	}
 
-	// wait for contents to be set
-	expectedFinalContent := "package foo.bar\n\nimport rego.v1\n"
-
+	// Wait for second didOpen to complete
 	timeout = time.NewTimer(determineTimeout())
-	select {
-	case <-timeout.C:
-		t.Fatalf("timed out waiting for did open content to be set")
-	default:
-		for {
-			time.Sleep(100 * time.Millisecond)
+	waitForViolations(t, "policy.rego", []string{}, []string{}, timeout, receivedMessages)
 
-			finalContent, ok := ls.cache.GetFileContents(newFileURI)
-			if !ok {
-				t.Log("expected file to be in cache after second didOpen")
-			}
+	// Drain any pending messages before checking final state
+	drainMessages(receivedMessages["policy.rego"])
 
-			if finalContent == expectedFinalContent {
-				break
-			}
-
-			t.Logf("expected cache to be updated to %q, got %q", expectedFinalContent, finalContent)
-		}
+	// Verify cache was updated
+	finalContent := testutil.MustBeOK(ls.cache.GetFileContents(newFileURI))(t)
+	if finalContent != newContent {
+		t.Fatalf("expected cache to contain %q, got %q", newContent, finalContent)
 	}
 }
 

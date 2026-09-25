@@ -17,61 +17,6 @@
     },
     "regal": {
       "properties": {
-        "client": {
-          "type": "object",
-          "description": "LSP client properties",
-          "properties": {
-            "capabilities": {
-              "type": "object",
-              "description": "Capabilities of the LSP client",
-              "additionalProperties": true
-            },
-            "identifier": {
-              "type": "integer",
-              "description": "Numeric identifier for the LSP client"
-            },
-            "init_options": {
-              "type": "object",
-              "description": "Initialization options for the LSP client",
-              "properties": {
-                "enableDebugCodelens": {
-                  "type": "boolean",
-                  "description": "Enable the debug code lens on packages and rules. This requires client support."
-                }
-              },
-              "required": [
-                "debug_supported"
-              ]
-            }
-          }
-        },
-        "server": {
-          "type": "object",
-          "description": "LSP server config and state",
-          "properties": {
-            "feature_flags": {
-              "type": "object",
-              "description": "Feature flags state",
-              "properties": {
-                "debug_provider": {
-                  "type": "boolean",
-                  "description": "If the server is configured to operate as a debug provider"
-                },
-                "explorer_provider": {
-                  "type": "boolean",
-                  "description": "If the server is configured to operate as an explorer provider"
-                },
-                "inline_eval_provider": {
-                  "type": "boolean",
-                  "description": "If the server is configured to operate as an inline eval provider"
-                }
-              },
-              "required": [
-                "feature_flags"
-              ]
-            }
-          }
-        },
         "environment": {
           "type": "object",
           "description": "Environment properties for the LSP client",
@@ -84,23 +29,12 @@
               "type": "string",
               "description": "File system path of the workspace root"
             },
-            "web_server_base_uri": {
-              "type": "string",
-              "description": "Base URI for Regal's local web server server"
-            },
-            "input_dot_json_path": {
+            "input_path": {
               "type": [
                 "string",
                 "null"
               ],
-              "description": "Path to the input.json file, if found"
-            },
-            "input_dot_json": {
-              "type": [
-                "object",
-                "null"
-              ],
-              "description": "Content of the input.json file, if found"
+              "description": "Path to the closest input.json or input.yaml file, if found"
             },
             "path_separator": {
               "type": "string",
@@ -109,7 +43,6 @@
           },
           "required": [
             "workspace_root_uri",
-            "web_server_base_uri",
             "path_separator"
           ]
         },
@@ -131,6 +64,9 @@
               }
             },
             "rego_version": {
+              "type": "string"
+            },
+            "root": {
               "type": "string"
             },
             "successful_parse_count": {

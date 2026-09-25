@@ -1,186 +1,249 @@
 package rego
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
+	"sync"
 
+	jsoniter "github.com/json-iterator/go"
 	"github.com/sourcegraph/jsonrpc2"
 
+	"github.com/open-policy-agent/opa/v1/ast"
 	"github.com/open-policy-agent/opa/v1/storage"
 
-	"github.com/open-policy-agent/regal/internal/io"
-	"github.com/open-policy-agent/regal/internal/lsp/handler"
+	"github.com/open-policy-agent/regal/internal/lsp/client"
+	"github.com/open-policy-agent/regal/internal/lsp/log"
 	"github.com/open-policy-agent/regal/internal/lsp/rego/query"
-	"github.com/open-policy-agent/regal/internal/lsp/semantictokens"
 	"github.com/open-policy-agent/regal/internal/lsp/types"
 	ruri "github.com/open-policy-agent/regal/internal/lsp/uri"
-	"github.com/open-policy-agent/regal/internal/util"
+	"github.com/open-policy-agent/regal/pkg/roast/encoding"
+	"github.com/open-policy-agent/regal/pkg/roast/rast"
 	"github.com/open-policy-agent/regal/pkg/roast/transform"
 )
 
 var (
-	emptyResponse = map[string]any{
-		"textDocument/codeAction":        make([]types.CodeAction, 0),
-		"textDocument/documentLink":      make([]types.DocumentLink, 0),
-		"textDocument/documentHighlight": make([]types.DocumentHighlight, 0),
-		"textDocument/documentSymbol":    make([]types.DocumentSymbol, 0),
-		"textDocument/codeLens":          make([]types.CodeLens, 0),
-		"textDocument/signatureHelp":     nil,
-	}
-
-	errIgnored = errors.New("ignored URI")
+	valueDecoder    = encoding.OfValue()
+	inputValuesPool = &sync.Pool{New: func() any {
+		return &inputCacheItem{
+			input:  ast.NewObjectWithCapacity(3),
+			params: ast.NewTerm(ast.NullValue),
+			regctx: ast.NewTerm(ast.NullValue),
+		}
+	}}
+	fileLines = Requirements{File: FileRequirements{Lines: true}}
 )
+
+func init() {
+	ast.InternStringTerm(
+		"textDocument/codeAction", "textDocument/codeLens", "textDocument/completion", "textDocument/documentLink",
+		"textDocument/documentHighlight", "textDocument/foldingRange", "textDocument/hover", "textDocument/inlayHint",
+		"textDocument/linkedEditingRange", "textDocument/selectionRange", "textDocument/semanticTokens/full",
+		"textDocument/signatureHelp", "textDocument/references", "textDocument/prepareRename", "textDocument/rename",
+		"completionItem/resolve", "inlayHint/resolve",
+
+		"method", "params", "identifier",
+
+		"feature_flags",
+		"debug_provider",
+		"explorer_provider",
+		"inline_evaluation_provider",
+		"opa_test_provider",
+		"server",
+		"content",
+		"successful_parse_count",
+		"parse_errors",
+		"workspace_root_path",
+		"foldingRange",
+		"foldingrange",
+		"bundle",
+		"lineFoldingOnly",
+		"init_options",
+	)
+}
 
 type (
 	Providers struct {
-		ContextProvider              func(uri string, reqs *Requirements) *RegalContext
+		ContextProvider              func(uri string, reqs Requirements) *RegalContext
 		ContentProvider              func(uri string) (string, bool)
 		IgnoredProvider              func(uri string) bool
 		ParseErrorsProvider          func(uri string) ([]types.Diagnostic, bool)
-		SuccessfulParseCountProvider func(uri string) (int, bool)
+		SuccessfulParseCountProvider func(uri string) (uint, bool)
+		InputPathProvider            func(path string) string
 	}
 
-	RegoRouter struct {
-		routes    map[string]Route
-		providers Providers
-		qc        *query.Cache
+	Router struct {
+		routes         map[string]Route
+		resultHandlers map[string]ResultHandler
+		providers      Providers
+		log            *log.Logger
+		qc             *query.Cache
 	}
 
 	Route struct {
-		handler  regoContextHandler
-		resolver regoContextHandler
-		requires *Requirements
+		requires Requirements
 	}
 
-	regoHandler        = func(context.Context, *query.Prepared, Providers, *jsonrpc2.Request) (any, error)
-	regoContextHandler = func(context.Context, *RegalContext, *jsonrpc2.Request) (any, error)
+	ResultHandler = func(context.Context, any) (any, error)
+	regoHandler   = func(context.Context, *query.Prepared, Providers, *jsonrpc2.Request) (any, error)
+
+	InitializeResponse struct {
+		Response struct {
+			ServerInfo   types.ServerInfo `json:"serverInfo"`
+			Capabilities any              `json:"capabilities"`
+		} `json:"response"`
+		Regal struct {
+			Client    client.Client `json:"client"`
+			Workspace struct {
+				URI string `json:"uri"`
+			} `json:"workspace"`
+			Warnings []string `json:"warnings"`
+		} `json:"regal"`
+	}
+
+	inputCacheItem struct {
+		input  ast.Value
+		params *ast.Term
+		regctx *ast.Term
+	}
 )
 
-func NewRegoRouter(ctx context.Context, store storage.Store, qc *query.Cache, prvs Providers) *RegoRouter {
-	if _, err := qc.GetOrSet(ctx, store, query.MainEval); err != nil {
+func NewRouter(ctx context.Context, s storage.Store, qc *query.Cache, prvs Providers, log *log.Logger) *Router {
+	if _, err := qc.GetOrSet(ctx, s, query.MainEval); err != nil {
 		panic(err) // can't recover here
 	}
 
 	routes := map[string]Route{
-		"textDocument/codeAction": {
-			handler: textDocument[types.CodeActionParams, []types.CodeAction],
-		},
-		"textDocument/codeLens": {
-			handler: textDocument[types.CodeLensParams, []types.CodeLens],
-			requires: &Requirements{
-				File: FileRequirements{
-					Lines:                    true,
-					SuccessfulParseLineCount: true,
-					ParseErrors:              true,
-				},
-			},
-		},
-		"textDocument/completion": {
-			handler: textDocument[types.CompletionParams, *types.CompletionList],
-			requires: &Requirements{
-				File:         FileRequirements{Lines: true},
-				InputDotJSON: true,
-			},
-		},
-		"textDocument/documentLink": {
-			handler: textDocument[types.DocumentLinkParams, []types.DocumentLink],
-		},
-		"textDocument/documentHighlight": {
-			handler:  textDocument[types.DocumentHighlightParams, []types.DocumentHighlight],
-			requires: &Requirements{File: FileRequirements{Lines: true}},
-		},
-		"textDocument/semanticTokens/full": {
-			handler:  semanticTokensHandler,
-			requires: &Requirements{File: FileRequirements{Lines: true}},
-		},
-		"textDocument/linkedEditingRange": {
-			handler:  textDocument[types.LinkedEditingRangeParams, types.LinkedEditingRanges],
-			requires: &Requirements{File: FileRequirements{Lines: true}},
-		},
-		"textDocument/selectionRange": {
-			handler: textDocument[types.SelectionRangeParams, []types.SelectionRange],
-		},
-		"textDocument/signatureHelp": {
-			handler:  textDocument[types.SignatureHelpParams, *types.SignatureHelp],
-			requires: &Requirements{File: FileRequirements{Lines: true}},
-		},
-		"completionItem/resolve": {
-			resolver: resolve[types.CompletionItem],
-		},
+		"textDocument/codeAction": {},
+		"textDocument/codeLens": {requires: Requirements{File: FileRequirements{
+			Lines:                    true,
+			SuccessfulParseLineCount: true,
+			ParseErrors:              true,
+		}}},
+		"textDocument/completion":          {requires: Requirements{File: FileRequirements{Lines: true}, InputPath: true}},
+		"textDocument/documentLink":        {requires: fileLines},
+		"textDocument/documentHighlight":   {requires: fileLines},
+		"textDocument/foldingRange":        {requires: fileLines},
+		"textDocument/hover":               {requires: fileLines},
+		"textDocument/inlayHint":           {requires: Requirements{File: FileRequirements{Lines: true, ParseErrors: true}}},
+		"textDocument/references":          {requires: fileLines},
+		"textDocument/prepareRename":       {requires: fileLines},
+		"textDocument/rename":              {requires: fileLines},
+		"textDocument/linkedEditingRange":  {requires: fileLines},
+		"textDocument/selectionRange":      {},
+		"textDocument/semanticTokens/full": {requires: fileLines},
+		"textDocument/signatureHelp":       {requires: fileLines},
+		"completionItem/resolve":           {},
+		"inlayHint/resolve":                {},
+
+		"initialized": {}, // special case
 	}
 
-	router := &RegoRouter{routes: routes, providers: prvs, qc: qc}
-
-	return router
+	return &Router{routes: routes, providers: prvs, qc: qc, log: log}
 }
 
-func (m *RegoRouter) Handle(ctx context.Context, _ *jsonrpc2.Conn, req *jsonrpc2.Request) (any, error) {
+func (m *Router) RegisterResultHandler(method string, handler ResultHandler) {
+	if m.resultHandlers == nil {
+		m.resultHandlers = make(map[string]ResultHandler)
+	}
+
+	if _, ok := m.resultHandlers[method]; ok {
+		panic("result handler already registered for method: " + method)
+	}
+
+	m.resultHandlers[method] = handler
+}
+
+func (m *Router) Handle(ctx context.Context, _ *jsonrpc2.Conn, req *jsonrpc2.Request) (result any, err error) {
+	pq := m.qc.Get(query.MainEval)
+	if pq == nil {
+		return nil, fmt.Errorf("no prepared query for %s", query.MainEval)
+	}
+
+	if req.Method == "initialize" {
+		if handler, ok := m.resultHandlers["initialize"]; ok {
+			result, err := initialize(ctx, pq, req)
+			if err != nil {
+				return nil, err
+			}
+
+			return handler(ctx, result)
+		}
+		// this could be removed, but since this is currently a hard dependency
+		// for the server, better be safe and error out here in case it's missing
+		return nil, errors.New("no result handler registered for initialize")
+	}
+
 	if route, ok := m.routes[req.Method]; ok {
-		pq := m.qc.Get(query.MainEval)
-		if pq == nil {
-			return nil, fmt.Errorf("no prepared query for %s", query.MainEval)
+		if strings.HasPrefix(req.Method, "textDocument/") {
+			result, err = m.textDocumentPassthroughHandlerFor(route)(ctx, pq, m.providers, req)
+		} else {
+			rctx := m.providers.ContextProvider("", route.requires) // No requirements for resolvers yet
+			rctx.Query = pq
+
+			result, err = passthrough(ctx, rctx, req)
 		}
 
-		if strings.HasSuffix(req.Method, "/resolve") && route.resolver != nil {
-			resolve := resolverFor(route)
-
-			return resolve(ctx, pq, m.providers, req)
+		if err == nil {
+			if resultHandler, ok := m.resultHandlers[req.Method]; ok {
+				result, err = resultHandler(ctx, result)
+			}
 		}
 
-		return handlerFor(route)(ctx, pq, m.providers, req)
+		return result, err
 	}
 
 	return nil, &jsonrpc2.Error{Code: jsonrpc2.CodeMethodNotFound, Message: "method not supported: " + req.Method}
 }
 
-// handlerFor wraps a regoHandler which first verifies that the text document URI isn't ignored
-// and then goes on to ensure that any custom requirements the handler may have are met.
-func handlerFor(route Route) regoHandler {
+// handleError logs the given message and returns nil, unless REGAL_DEBUG
+// is set, in which case msg is returned as an error. This makes issues
+// more visible during development, while not annoying actual users.
+func (m *Router) handleError(msg string) error {
+	if os.Getenv("REGAL_DEBUG") != "" {
+		return errors.New(msg)
+	}
+
+	m.log.Message(msg)
+
+	return nil
+}
+
+// textDocumentPassthroughHandlerFor wraps a regoHandler which first verifies that the text document URI isn't
+// ignored, and ensures that any custom requirements the handler may have are met.
+func (m *Router) textDocumentPassthroughHandlerFor(route Route) regoHandler {
 	return func(ctx context.Context, query *query.Prepared, prvs Providers, req *jsonrpc2.Request) (any, error) {
-		// This is mandatory requirement for all routes managed here.
-		uri, err := decodeAndCheckURI(req, prvs.IgnoredProvider)
-		if err != nil {
-			if errors.Is(err, errIgnored) {
-				return emptyResponse[req.Method], nil
-			}
-
-			return nil, err
+		maybeURI := jsoniter.Get(*req.Params, "textDocument", "uri")
+		if maybeURI.LastError() != nil {
+			return nil, fmt.Errorf("expected textDocument.uri parameter: %w", maybeURI.LastError())
 		}
 
-		rctx, err := regalContextForRequirements(prvs, uri, route.requires)
-		if err != nil {
-			return nil, err
+		docURI := maybeURI.ToString()
+		if !strings.HasSuffix(docURI, ".rego") || prvs.IgnoredProvider != nil && prvs.IgnoredProvider(docURI) {
+			// This is not an error, but perhaps we should wire in some debug logging later
+			return nil, nil
 		}
 
-		if rctx == nil {
-			return emptyResponse[req.Method], nil // e.g. file has always been unparsable
+		rctx, err := regalContextForRequirements(prvs, docURI, route.requires)
+		if err != nil {
+			return nil, m.handleError(fmt.Sprintf("error handling route %s: %v", req.Method, err))
+		} else if rctx == nil {
+			return nil, nil // e.g. file has always been unparsable
 		}
 
 		rctx.Query = query
 
-		return route.handler(ctx, rctx, req)
+		return passthrough(ctx, rctx, req)
 	}
 }
 
-func resolverFor(route Route) regoHandler {
-	return func(ctx context.Context, query *query.Prepared, prvs Providers, req *jsonrpc2.Request) (any, error) {
-		rctx := prvs.ContextProvider("", nil) // No requirements for resolvers yet
-		rctx.Query = query
-
-		return route.resolver(ctx, rctx, req)
-	}
-}
-
-func regalContextForRequirements(prvs Providers, uri string, reqs *Requirements) (*RegalContext, error) {
+func regalContextForRequirements(prvs Providers, uri string, reqs Requirements) (*RegalContext, error) {
 	// Set up a basic RegalContext, which while not used by all routes, is provided for all.
 	rctx := prvs.ContextProvider(uri, reqs)
-
-	if reqs == nil {
-		return rctx, nil
-	}
-
 	if reqs.File.Lines && rctx.File.Lines == nil {
 		if prvs.ContentProvider == nil {
 			return nil, errors.New("content provider required but not provided")
@@ -199,11 +262,11 @@ func regalContextForRequirements(prvs Providers, uri string, reqs *Requirements)
 			return nil, errors.New("successful parse count provider required but not provided")
 		}
 
-		if splc, ok := prvs.SuccessfulParseCountProvider(uri); ok {
-			rctx.File.SuccessfulParseCount = util.SafeIntToUint(splc)
-		} else {
+		if splc, ok := prvs.SuccessfulParseCountProvider(uri); !ok {
 			// if the file has always been unparsable, we can return early
 			return nil, nil //nolint:nilnil
+		} else {
+			rctx.File.SuccessfulParseCount = splc
 		}
 	}
 
@@ -217,95 +280,80 @@ func regalContextForRequirements(prvs Providers, uri string, reqs *Requirements)
 		}
 	}
 
-	if reqs.InputDotJSON {
-		path := ruri.ToPath(uri)
-		root := ruri.ToPath(rctx.Environment.WorkspaceRootURI)
-
-		// TODO: Avoid the intermediate map[string]any step and unmarshal directly into ast.Value.
-		inputDotJSONPath, inputDotJSONContent := io.FindInput(path, root)
-		if inputDotJSONPath != "" && inputDotJSONContent != nil {
-			inputDotJSONValue, err := transform.ToOPAInputValue(inputDotJSONContent)
-			if err != nil {
-				return nil, fmt.Errorf("failed to convert input.json to value: %w", err)
-			}
-
-			rctx.Environment.InputDotJSONPath = &inputDotJSONPath
-			rctx.Environment.InputDotJSON = inputDotJSONValue
+	if reqs.InputPath {
+		if prvs.InputPathProvider == nil {
+			return nil, errors.New("input.json path provider required but not provided")
 		}
+
+		path := ruri.ToRelativePath(uri, rctx.Environment.WorkspaceRootURI)
+		rctx.Environment.InputPath = prvs.InputPathProvider(path)
 	}
 
 	return rctx, nil
 }
 
-// textDocument is a handler that requires TextDocumentParams (i.e. a document URI)
-// embedded in parameter of type P, returning a result of type R.
-func textDocument[P, R any](ctx context.Context, rctx *RegalContext, req *jsonrpc2.Request) (any, error) {
-	params, err := decodeParams[P](req)
-	if err != nil {
-		return nil, err
+// passthrough is a handler that:
+//  1. Parses provided input directly to an ast.Value without having 'params' roundtrip to an LSP Go type
+//  2. Returns the result of evaluation as the Rego handler provides it, without an intermediate Go type in between
+//
+// This is much more efficient compared to the textDocument handler — which does both of those things — at the cost of
+// potentially letting invalid input or output through. Runtime validation of types can however be done in Rego too,
+// and that's where future handlers validation should take place when needed.
+func passthrough(ctx context.Context, rctx *RegalContext, req *jsonrpc2.Request) (any, error) {
+	if req.Params == nil {
+		bs, _ := req.MarshalJSON()
+
+		return nil, fmt.Errorf("expected request containing 'params', got %v", string(bs))
 	}
 
-	result, err := QueryEval[P, R](ctx, rctx.Query, NewInput(req.Method, rctx, params))
+	cached := inputValuesPool.Get().(*inputCacheItem) //nolint:forcetypeassert
+	defer inputValuesPool.Put(cached)
+
+	params, err := valueDecoder.Decode(*req.Params)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to decode params: %w\n%s", err, string(*req.Params))
 	}
 
-	// For now we just unwrap the LSP response here, but may use other fields in the future.
-	// In particular, we'll likely want to allow Rego handlers to return detailed error messages.
-	return result.Response, nil
-}
+	cached.params.Value = params
+	cached.regctx.Value = rast.StructToValue(rctx)
 
-func semanticTokensHandler(ctx context.Context, rctx *RegalContext, req *jsonrpc2.Request) (any, error) {
-	params, err := decodeParams[types.SemanticTokensParams](req)
-	if err != nil {
-		return nil, err
-	}
+	inputObj := cached.input.(ast.Object) //nolint:forcetypeassert
+	rast.Insert(inputObj, "method", ast.InternedTerm(req.Method))
+	rast.Insert(inputObj, "params", cached.params)
+	rast.Insert(inputObj, "regal", cached.regctx)
 
-	result, err := QueryEval[types.SemanticTokensParams, semantictokens.SemanticTokensResult](
-		ctx,
-		rctx.Query,
-		NewInput(req.Method, rctx, params))
+	res, err := CachedQueryEvalUndecoded(ctx, rctx.Query, cached.input)
 	if err != nil {
 		return nil, fmt.Errorf("failed to evaluate prepared query: %w", err)
 	}
 
-	response, err := semantictokens.Full(ctx, result.Response)
+	if obj, ok := res.(ast.Object); ok {
+		rsp := obj.Get(ast.InternedTerm("response")).Value
 
-	return response, err
+		var buf bytes.Buffer
+
+		if err := encoding.OfValue().Encode(&buf, rsp); err != nil {
+			return nil, fmt.Errorf("failed to marshal response: %w", err)
+		}
+
+		return new(json.RawMessage(buf.Bytes())), nil
+	}
+
+	return nil, fmt.Errorf("unexpected query result format: %v", res)
 }
 
-// resolve handlers return the same type they receive as parameter, but enriched with data it resolves.
-func resolve[P any](ctx context.Context, rctx *RegalContext, req *jsonrpc2.Request) (any, error) {
-	params, err := decodeParams[P](req)
+func initialize(ctx context.Context, pq *query.Prepared, req *jsonrpc2.Request) (any, error) {
+	var result InitializeResponse
+
+	paramsValue, err := transform.AnyToValue(req.Params)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to decode initialize params: %w", err)
 	}
 
-	result, err := QueryEval[P, P](ctx, rctx.Query, NewInput(req.Method, rctx, params))
-	if err != nil {
-		return nil, err
-	}
+	err = CachedQueryEval(ctx, pq, ast.NewObject(
+		rast.Item("method", ast.InternedTerm(req.Method)),
+		rast.Item("params", ast.NewTerm(paramsValue)),
+	), &result)
 
-	return result.Response, nil
-}
-
-func decodeAndCheckURI(req *jsonrpc2.Request, ignored func(string) bool) (string, error) {
-	tdp, err := decodeParams[types.TextDocumentParams](req)
-	if err != nil {
-		return "", err
-	}
-
-	if ignored != nil && ignored(tdp.TextDocument.URI) {
-		return "", errIgnored
-	}
-
-	return tdp.TextDocument.URI, nil
-}
-
-func decodeParams[P any](req *jsonrpc2.Request) (P, error) {
-	var params P
-
-	err := handler.Decode(req, &params)
-
-	return params, err
+	return result, err
 }

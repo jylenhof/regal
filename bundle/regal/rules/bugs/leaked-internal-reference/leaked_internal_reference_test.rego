@@ -65,13 +65,16 @@ test_fail_leaked_internal_reference_in_nested_comprehension if {
 }
 
 test_ignore_test_file_by_default if {
-	r := rule.report with input as ast.policy("foo := data.bar._wow") with input.regal.file.name as "p_test.rego"
+	r := rule.report
+		with input as ast.policy("foo := data.bar._wow")
+		with input.regal.file.name as "p_test.rego"
 
 	r == set()
 }
 
 test_ignore_test_file_can_be_disabled if {
-	r := rule.report with input as ast.policy(`foo := data.bar._wow`)
+	r := rule.report
+		with input as ast.policy(`foo := data.bar._wow`)
 		with input.regal.file.name as "p_test.rego"
 		with config.rules as {"bugs": {"leaked-internal-reference": {"include-test-files": true}}}
 
@@ -93,7 +96,7 @@ expected := {
 	"level": "error",
 	"related_resources": [{
 		"description": "documentation",
-		"ref": config.docs.resolve_url("$baseUrl/$category/leaked-internal-reference", "bugs"),
+		"ref": "https://www.openpolicyagent.org/projects/regal/rules/bugs/leaked-internal-reference",
 	}],
 	"title": "leaked-internal-reference",
 	"location": {"file": "policy.rego"},

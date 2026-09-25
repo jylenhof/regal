@@ -1,7 +1,7 @@
 package regal.rules.performance["non-loop-expression_test"]
 
 import data.regal.ast
-import data.regal.config
+
 import data.regal.rules.performance["non-loop-expression"] as rule
 
 test_loop_start_points_walks_are_loops if {
@@ -12,7 +12,7 @@ allow if {
 }
 `)
 
-	sps == {"0": {5: {
+	sps == {0: {5: {
 		{"location": "5:13:5:17", "type": "var", "value": "path"},
 		{"location": "5:19:5:24", "type": "var", "value": "value"},
 	}}}
@@ -28,7 +28,7 @@ allow if {
 }
 `)
 
-	sps == {"0": {
+	sps == {0: {
 		5: {
 			{"location": "5:10:5:11", "type": "var", "value": "v"},
 			{"location": "5:7:5:8", "type": "var", "value": "k"},
@@ -45,7 +45,7 @@ allow if {
 }
 `)
 
-	sps == {"0": {5: {
+	sps == {0: {5: {
 		{"location": "5:10:5:11", "type": "var", "value": "v"},
 		{"location": "5:7:5:8", "type": "var", "value": "k"},
 	}}}
@@ -60,7 +60,7 @@ allow if {
 }
 `)
 
-	sps == {"0": {5: {{"location": "5:7:5:11", "type": "var", "value": "user"}}}}
+	sps == {0: {5: {{"location": "5:7:5:11", "type": "var", "value": "user"}}}}
 }
 
 test_loop_start_points_wildcard if {
@@ -71,7 +71,7 @@ allow if {
 }
 `)
 
-	sps == {"0": {5: {{"location": "5:2:5:7", "type": "var", "value": "email"}}}}
+	sps == {0: {5: {{"location": "5:2:5:7", "type": "var", "value": "email"}}}}
 }
 
 test_assignment_index if {
@@ -88,7 +88,7 @@ allow if {
 }
 `)
 
-	ai == {"0": {
+	ai == {0: {
 		"baz": {12},
 		"email": {6},
 		"foo": {9},
@@ -112,7 +112,7 @@ allow if {
 	not bar
 }`)
 
-	ai == {"0": {
+	ai == {0: {
 		"foos": {5},
 		"bar": {9},
 		"baz": {9},
@@ -185,17 +185,17 @@ test_fail_single_some if {
 	r := rule.report with input as ast.policy(`
 allow if {
 	some email
-	endswith(input.email, "acmecorp.com")
 	user.emails[email] == input.email
+	endswith(input.email, "acmecorp.com")
 }`)
 
 	r == with_location({
 		"col": 2,
 		"file": "policy.rego",
-		"row": 6,
+		"row": 7,
 		"end": {
 			"col": 39,
-			"row": 6,
+			"row": 7,
 		},
 		"text": "\tendswith(input.email, \"acmecorp.com\")",
 	})
@@ -329,12 +329,93 @@ test_success_not_loop_unification if {
 	r == set()
 }
 
+# confirm fix for: https://github.com/open-policy-agent/regal/issues/1443
+test_ref_loop_output_var if {
+	r := rule.report with input as ast.policy(`r if {
+		input[a].d[_]
+		a == 1
+	}`)
+
+	r == set()
+}
+
+# mentioned in: https://github.com/open-policy-agent/regal/issues/1443
+test_non_ref_output_var if {
+	r := rule.report with input as ast.policy(`r if {
+		some petid
+		input.path = ["pets", petid]
+		input.user == input.owner
+	}`)
+
+	r == set()
+}
+
+test_fail_non_loop_assignment_expression if {
+	r := rule.report with input as ast.policy(`r if {
+		some a in input.b
+		c := lower("HELLO")
+		d := concat("", [a, c])
+	}`)
+		with ast.builtin_names as {"lower"}
+
+	r == with_location({
+		"col": 3,
+		"end": {
+			"col": 22,
+			"row": 5,
+		},
+		"file": "policy.rego",
+		"row": 5,
+		"text": "\t\tc := lower(\"HELLO\")",
+	})
+}
+
+test_fail_non_loop_assignment_with_expression if {
+	r := rule.report with input as ast.policy(`r if {
+		some a in input.b
+		c := lower(foo) with input as {"foo": "bar"}
+	}`)
+		with ast.builtin_names as {"lower"}
+
+	r == {{
+		"category": "performance",
+		"description": "Non-loop expression in loop",
+		"level": "error",
+		"location": {
+			"col": 3,
+			"end": {
+				"col": 47,
+				"row": 5,
+			},
+			"file": "policy.rego",
+			"row": 5,
+			"text": "\t\tc := lower(foo) with input as {\"foo\": \"bar\"}",
+		},
+		"related_resources": [{
+			"description": "documentation",
+			"ref": "https://www.openpolicyagent.org/projects/regal/rules/performance/non-loop-expression",
+		}],
+		"title": "non-loop-expression",
+	}}
+}
+
+test_success_non_loop_assignment_with_expression if {
+	r := rule.report
+		with input as ast.policy(`r if {
+			some a in input.b
+			c := lower(foo) with input as {"foo": a}
+		}`)
+		with ast.builtin_names as {"lower"}
+
+	r == set()
+}
+
 with_location(location) := {{
 	"category": "performance",
-	"description": "Non-loop expression",
+	"description": "Non-loop expression in loop",
 	"related_resources": [{
 		"description": "documentation",
-		"ref": config.docs.resolve_url("$baseUrl/$category/non-loop-expression", "performance"),
+		"ref": "https://www.openpolicyagent.org/projects/regal/rules/performance/non-loop-expression",
 	}],
 	"title": "non-loop-expression",
 	"location": location,

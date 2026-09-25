@@ -1,4 +1,4 @@
-package linter
+package linter_test
 
 import (
 	"bytes"
@@ -9,15 +9,14 @@ import (
 
 	"github.com/open-policy-agent/opa/v1/ast"
 	"github.com/open-policy-agent/opa/v1/topdown"
+	outil "github.com/open-policy-agent/opa/v1/util"
 
-	"github.com/open-policy-agent/regal/internal/parse"
 	"github.com/open-policy-agent/regal/internal/test"
 	"github.com/open-policy-agent/regal/internal/test/assert"
 	"github.com/open-policy-agent/regal/internal/test/must"
 	"github.com/open-policy-agent/regal/internal/testutil"
-	"github.com/open-policy-agent/regal/internal/util"
 	"github.com/open-policy-agent/regal/pkg/config"
-	"github.com/open-policy-agent/regal/pkg/rules"
+	regal "github.com/open-policy-agent/regal/pkg/linter"
 )
 
 func TestLintWithDefaultBundle(t *testing.T) {
@@ -32,7 +31,7 @@ camelCase if {
 }
 `)
 
-	linter := NewLinter().WithEnableAll(true).WithInputModules(input)
+	linter := regal.NewLinter().WithEnableAll(true).WithInputModules(input)
 	result := must.Return(linter.Lint(t.Context()))(t)
 
 	testutil.AssertNumViolations(t, 2, result)
@@ -54,7 +53,7 @@ func TestLintWithUserConfig(t *testing.T) {
 	input := test.InputPolicy("p/p.rego", "package p\n\nr := input.foo[_]\n")
 	rules := map[string]config.Category{"bugs": {"rule-shadows-builtin": config.Rule{Level: "ignore"}}}
 
-	result := must.Return(NewLinter().
+	result := must.Return(regal.NewLinter().
 		WithUserConfig(config.Config{Rules: rules}).
 		WithInputModules(input).
 		Lint(t.Context()))(t)
@@ -174,7 +173,7 @@ or := 1
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			linter := NewLinter().
+			linter := regal.NewLinter().
 				WithPathPrefix(tc.rootDir).
 				WithIgnore(tc.ignoreFilesFlag).
 				WithInputModules(test.InputPolicy(tc.filename, policy))
@@ -205,7 +204,7 @@ or := 1
 func TestLintWithCustomRule(t *testing.T) {
 	t.Parallel()
 
-	result := must.Return(NewLinter().
+	result := must.Return(regal.NewLinter().
 		WithCustomRulesPaths(filepath.Join("testdata", "custom.rego")).
 		WithInputModules(test.InputPolicy("p/p.rego", "package p\n\nimport rego.v1\n")).
 		Lint(t.Context()))(t)
@@ -217,7 +216,7 @@ func TestLintWithCustomRule(t *testing.T) {
 func TestLintWithErrorInEnable(t *testing.T) {
 	t.Parallel()
 
-	_, err := NewLinter().
+	_, err := regal.NewLinter().
 		WithCustomRulesPaths(filepath.Join("testdata", "custom.rego")).
 		WithEnabledRules("foo").
 		WithInputModules(test.InputPolicy("p/p.rego", "package p")).
@@ -232,7 +231,7 @@ var testLintWithCustomEmbeddedRulesFS embed.FS
 func TestLintWithCustomEmbeddedRules(t *testing.T) {
 	t.Parallel()
 
-	result := must.Return(NewLinter().
+	result := must.Return(regal.NewLinter().
 		WithCustomRulesFromFS(testLintWithCustomEmbeddedRulesFS, "testdata").
 		WithInputModules(test.InputPolicy("p/p.rego", "package p\n\nimport rego.v1\n")).
 		Lint(t.Context()))(t)
@@ -244,7 +243,7 @@ func TestLintWithCustomEmbeddedRules(t *testing.T) {
 func TestLintWithCustomRuleAndCustomConfig(t *testing.T) {
 	t.Parallel()
 
-	linter := NewLinter().
+	linter := regal.NewLinter().
 		WithUserConfig(config.Config{Rules: map[string]config.Category{
 			"naming": {"acme-corp-package": config.Rule{Level: "ignore"}},
 		}}).
@@ -258,7 +257,7 @@ func TestLintMergedConfigInheritsLevelFromProvided(t *testing.T) {
 	t.Parallel()
 
 	// Note that the user configuration does not provide a level
-	linter := NewLinter().
+	linter := regal.NewLinter().
 		WithUserConfig(config.Config{Rules: map[string]config.Category{
 			"style": {"file-length": config.Rule{Extra: config.ExtraAttributes{"max-file-length": 1}}},
 		}}).
@@ -287,7 +286,7 @@ func TestLintMergedConfigUsesProvidedDefaults(t *testing.T) {
 		Rules: map[string]config.Category{"style": {"opa-fmt": config.Rule{Level: "warning"}}},
 	}
 
-	mergedConfig := must.Return(NewLinter().
+	mergedConfig := must.Return(regal.NewLinter().
 		WithUserConfig(userConfig).
 		WithInputModules(test.InputPolicy("p.rego", `package p`)).
 		GetConfig())(t)
@@ -310,7 +309,7 @@ func TestLintWithPrintHook(t *testing.T) {
 
 	var bb bytes.Buffer
 
-	must.Return(NewLinter().
+	must.Return(regal.NewLinter().
 		WithCustomRulesPaths(filepath.Join("testdata", "printer.rego")).
 		WithPrintHook(topdown.NewPrintHook(&bb)).
 		WithInputModules(test.InputPolicy("p.rego", "package p")).
@@ -319,40 +318,10 @@ func TestLintWithPrintHook(t *testing.T) {
 	assert.Equal(t, "p.rego\n", bb.String(), "unexpected print hook output")
 }
 
-func TestLintWithAggregateRule(t *testing.T) {
-	t.Parallel()
-
-	policies := make(map[string]string, 2)
-	policies["foo.rego"] = `package foo
-		import data.bar
-
-		default allow := false
-	`
-	policies["bar.rego"] = `package bar
-		import data.foo.allow
-	`
-
-	result := must.Return(NewLinter().
-		WithDisableAll(true).
-		WithPrintHook(topdown.NewPrintHook(t.Output())).
-		WithEnabledRules("prefer-package-imports").
-		WithInputModules(new(rules.NewInput(policies, util.MapValues(policies, parse.MustParseModule)))).
-		Lint(t.Context()))(t)
-
-	testutil.AssertNumViolations(t, 1, result)
-
-	violation := result.Violations[0]
-
-	assert.Equal(t, "prefer-package-imports", violation.Title, "unexpected violation")
-	assert.Equal(t, 2, violation.Location.Row, "unexpected line number")
-	assert.Equal(t, 3, violation.Location.Column, "unexpected column number")
-	assert.Equal(t, "import data.foo.allow", *violation.Location.Text, "unexpected location text")
-}
-
 func TestEnabledRules(t *testing.T) {
 	t.Parallel()
 
-	enabledRules, _, err := NewLinter().
+	enabledRules, err := regal.NewLinter().
 		WithDisableAll(true).
 		WithEnabledRules("opa-fmt", "no-whitespace-comment").
 		DetermineEnabledRules(t.Context())
@@ -378,31 +347,19 @@ rules:
     directory-package-mismatch: # non agg rule
       level: ignore
 `))
-	enabledRules, enabledAggRules, err := NewLinter().WithUserConfig(config).DetermineEnabledRules(t.Context())
+	enabledRules, err := regal.NewLinter().WithUserConfig(config).DetermineEnabledRules(t.Context())
 
 	must.Equal(t, nil, err, "unexpected error")
 	must.NotEqual(t, 0, len(enabledRules), "enabled aggregate rules")
 	assert.False(t, slices.Contains(enabledRules, "directory-package-mismatch"))
 	assert.False(t, slices.Contains(enabledRules, "opa-fmt"))
-	assert.False(t, slices.Contains(enabledAggRules, "unresolved-import"))
-}
-
-func TestEnabledAggregateRules(t *testing.T) {
-	t.Parallel()
-
-	_, enabledRules, err := NewLinter().
-		WithDisableAll(true).
-		WithEnabledRules("opa-fmt", "unresolved-import", "use-assignment-operator").
-		DetermineEnabledRules(t.Context())
-
-	must.Equal(t, nil, err, "unexpected error")
-	assert.SlicesEqual(t, []string{"unresolved-import"}, enabledRules, "unexpected enabled aggregate rules")
+	assert.False(t, slices.Contains(enabledRules, "unresolved-import"))
 }
 
 func TestLintWithCollectQuery(t *testing.T) {
 	t.Parallel()
 
-	result := must.Return(NewLinter().
+	result := must.Return(regal.NewLinter().
 		WithDisableAll(true).
 		WithEnabledRules("unresolved-import").
 		WithCollectQuery(true).     // needed since we have a single file input
@@ -412,51 +369,33 @@ func TestLintWithCollectQuery(t *testing.T) {
 
 	must.Equal(t, 1, result.Aggregates.Len(), "aggregates count")
 
-	_, err := result.Aggregates.Find(util.Map([]string{"p.rego", "imports/unresolved-import"}, ast.InternedTerm))
+	_, err := result.Aggregates.Find(outil.Map([]string{"p.rego", "common"}, ast.InternedTerm))
 
-	assert.Equal(t, nil, err, "expected aggregates to contain 'p.rego/imports/unresolved-import'")
+	assert.Equal(t, nil, err, "expected aggregates to contain 'p.rego/common'")
 }
 
-func TestLintWithCollectQueryAndAggregates(t *testing.T) {
+func TestLintWithExperimentalKeywords(t *testing.T) {
 	t.Parallel()
 
-	files := map[string]string{
-		"foo.rego": "package foo\n\nimport data.unresolved",
-		"bar.rego": "package foo\n\nimport data.unresolved",
-		"baz.rego": "package foo\n\nimport data.unresolved",
-	}
+	input := test.InputPolicy("p/p.rego", `package p
 
-	var ok bool
+import future.keywords.or
 
-	allAggregates := ast.NewObject()
+allow if {
+	input.a = 1 or input.b = 2
+}
+`)
 
-	for file, content := range files {
-		linter := NewLinter().
-			WithDisableAll(true).
-			WithEnabledRules("unresolved-import").
-			WithCollectQuery(true). // runs collect for a single file input
-			WithExportAggregates(true).
-			WithInputModules(test.InputPolicy(file, content))
+	result := must.Return(regal.NewLinter().WithInputModules(input).Lint(t.Context()))(t)
 
-		if allAggregates, ok = allAggregates.Merge(must.Return(linter.Lint(t.Context()))(t).Aggregates); !ok {
-			t.Fatalf("failed to merge aggregates for file %s", file)
-		}
-	}
+	testutil.AssertNumViolations(t, 2, result)
 
-	result := must.Return(NewLinter().
-		WithDisableAll(true).
-		WithEnabledRules("unresolved-import").
-		WithAggregates(allAggregates).
-		Lint(t.Context()))(t)
+	// one violation for each operand of the `or` expression
+	assert.Equal(t, "prefer-equals-comparison", result.Violations[0].Title, "unexpected violation")
+	assert.Equal(t, 6, result.Violations[0].Location.Row, "unexpected line number")
+	assert.Equal(t, 2, result.Violations[0].Location.Column, "unexpected column number")
 
-	testutil.AssertNumViolations(t, 3, result)
-
-	foundFiles := make([]string, 0, 3)
-
-	for _, v := range result.Violations {
-		assert.Equal(t, "unresolved-import", v.Title, "title")
-		foundFiles = append(foundFiles, v.Location.File)
-	}
-
-	assert.SlicesEqual(t, []string{"bar.rego", "baz.rego", "foo.rego"}, util.Sorted(foundFiles), "files")
+	assert.Equal(t, "prefer-equals-comparison", result.Violations[1].Title, "unexpected violation")
+	assert.Equal(t, 6, result.Violations[1].Location.Row, "unexpected line number")
+	assert.Equal(t, 17, result.Violations[1].Location.Column, "unexpected column number")
 }

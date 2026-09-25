@@ -17,7 +17,9 @@ import data.regal.util
 
 # METADATA
 # entrypoint: true
-result["response"] := items
+default result["response"] := null
+
+result["response"] := items if items != set()
 
 # METADATA
 # description: Highlights a function args in position
@@ -35,7 +37,7 @@ items contains item if {
 items contains item if {
 	[arg, i] := find.arg_at_position
 
-	some expr in ast.found.expressions[sprintf("%d", [i])]
+	some expr in ast.found.expressions[i]
 
 	walk(expr, [_, value])
 
@@ -71,8 +73,14 @@ items contains item if {
 
 	item := {
 		"range": {
-			"start": {"line": input.params.position.line, "character": 2},
-			"end": {"line": input.params.position.line, "character": 10},
+			"start": {
+				"line": input.params.position.line,
+				"character": 2,
+			},
+			"end": {
+				"line": input.params.position.line,
+				"character": 10,
+			},
 		},
 		"kind": 1,
 	}
@@ -96,8 +104,14 @@ items contains item if {
 
 	item := {
 		"range": {
-			"start": {"line": i, "character": 2},
-			"end": {"line": i, "character": 2 + count(word)},
+			"start": {
+				"line": i,
+				"character": 2,
+			},
+			"end": {
+				"line": i,
+				"character": 2 + count(word),
+			},
 		},
 		"kind": 1,
 	}
@@ -110,8 +124,14 @@ items contains item if {
 	word := _attribute_from_text(input.regal.file.lines[line])
 	item := {
 		"range": {
-			"start": {"line": line, "character": 2},
-			"end": {"line": line, "character": 2 + count(word)},
+			"start": {
+				"line": line,
+				"character": 2,
+			},
+			"end": {
+				"line": line,
+				"character": 2 + count(word),
+			},
 		},
 		"kind": 1,
 	}

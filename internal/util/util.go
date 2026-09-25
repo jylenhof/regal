@@ -2,7 +2,6 @@ package util
 
 import (
 	"bytes"
-	"cmp"
 	"errors"
 	"fmt"
 	"iter"
@@ -11,7 +10,13 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	outil "github.com/open-policy-agent/opa/v1/util"
 )
+
+type AnyUint interface {
+	~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64
+}
 
 // NilSliceToEmpty returns empty slice if provided slice is nil.
 func NilSliceToEmpty[T any](a []T) []T {
@@ -53,14 +58,22 @@ func Must[T any](v T, err error) T {
 	return v
 }
 
-// Map applies a function to each element of a slice and returns a new slice with the results.
-func Map[T, U any](a []T, f func(T) U) []U {
-	b := make([]U, len(a))
-	for i := range a {
-		b[i] = f(a[i])
+// Mapper returns a function that applies f to each element in a and returns a new slice with the results.
+func Mapper[T, U any](f func(T) U) func(...T) []U {
+	return func(a ...T) []U {
+		return outil.Map(a, f)
+	}
+}
+
+// FindFirst returns the first element in a slice that satisfies pred, or the zero value of T and false if not found.
+func FindFirst[T any, S ~[]T](s S, pred func(T) bool) (v T, ok bool) {
+	for _, v := range s {
+		if pred(v) {
+			return v, true
+		}
 	}
 
-	return b
+	return v, false
 }
 
 // MapKeys applies a function to each key of a map and returns a new slice with the results.
@@ -73,14 +86,24 @@ func MapKeys[K comparable, V any, U any](m map[K]V, f func(K) U) []U {
 	return keys
 }
 
-// MapValues applies the function f to each value in the map m and returns a new map with the same keys.
-func MapValues[K comparable, V, R any](m map[K]V, f func(V) R) map[K]R {
-	mapped := make(map[K]R, len(m))
-	for k, v := range m {
-		mapped[k] = f(v)
+// MapGetOr returns the value for key in m if found, else defaultVal.
+func MapGetOr[K comparable, V any](m map[K]V, key K, defaultVal V) V {
+	if val, ok := m[key]; ok {
+		return val
 	}
 
-	return mapped
+	return defaultVal
+}
+
+// MapGet returns the value for key in m if found, else the zero value for V.
+func MapGet[T any](m map[string]any, key string) (typed T) {
+	if val, ok := m[key]; ok {
+		if found, ok := val.(T); ok {
+			typed = found
+		}
+	}
+
+	return typed
 }
 
 // Filter returns a new slice containing only the elements of s that
@@ -146,8 +169,7 @@ func FilepathJoiner(base string) func(string) string {
 	}
 }
 
-// SafeUintToInt will convert a uint to an int, clamping the result to
-// math.MaxInt.
+// SafeUintToInt will convert a uint to an int, clamping the result to math.MaxInt.
 func SafeUintToInt(u uint) int {
 	if u > math.MaxInt {
 		return math.MaxInt // Clamp to prevent overflow
@@ -187,11 +209,7 @@ func EnsureSuffix(s, suf string) string {
 
 // IsAnyError checks if the provided error "Is" any of the provided errors.
 func IsAnyError(err error, errs ...error) bool {
-	if err != nil {
-		return slices.ContainsFunc(errs, Partial2(errors.Is, err))
-	}
-
-	return false
+	return err != nil && slices.ContainsFunc(errs, Partial2(errors.Is, err))
 }
 
 // HasAnySuffix checks if the string s has any of the provided suffixes.
@@ -267,27 +285,6 @@ func WrapErr(err error, msg string) error {
 	return fmt.Errorf("%s: %w", msg, err)
 }
 
-// SendToAll sends the provided value to all provided channels.
-func SendToAll[T any](val T, ch ...chan T) {
-	for _, c := range ch {
-		c <- val
-	}
-}
-
-// GetMapValue extracts a typed value from a map[string]any, returning the value if the type matched,
-// or the zero values of correct type.
-func GetMapValue[T any](m map[string]any, key string) T {
-	if val, ok := m[key]; ok {
-		if typed, ok := val.(T); ok {
-			return typed
-		}
-	}
-
-	var zero T
-
-	return zero
-}
-
 // AnySliceTo converts a slice of any to a slice of T, returning an error if any element cannot be casted.
 func AnySliceTo[T any](in []any) ([]T, error) {
 	out := make([]T, 0, len(in))
@@ -304,14 +301,6 @@ func AnySliceTo[T any](in []any) ([]T, error) {
 	return out, nil
 }
 
-// Sorted sorts s in place using slices.Sort and returns it
-// Can be convenient for use in return values, map definitions, chaining, etc.
-func Sorted[T cmp.Ordered](s []T) []T {
-	slices.Sort(s)
-
-	return s
-}
-
 // Reversed reverses s in place using slices.Reverse and returns it.
 func Reversed[T any](s []T) []T {
 	slices.Reverse(s)
@@ -320,7 +309,7 @@ func Reversed[T any](s []T) []T {
 }
 
 // LineContents returns the contents on line lineNum (0-indexed) from document.
-// This function assumes the lineNum is known to be contained within the document,.
+// This function assumes the lineNum is known to be contained within the document.
 func LineContents(document []byte, lineNum uint) []byte {
 	for i, line := range Lines(document) {
 		if i == lineNum {
@@ -343,4 +332,54 @@ func Lines(s []byte) iter.Seq2[uint, []byte] {
 			lineNum++
 		}
 	}
+}
+
+// NumLines returns the number of lines in s, as uint for convenience with LSP spec types and more.
+func NumLines(s string) uint {
+	return SafeIntToUint(strings.Count(s, "\n")) + 1
+}
+
+// BytesNumLines returns the number of lines in s, as uint for convenience with LSP spec types and more.
+func BytesNumLines(s []byte) uint {
+	return SafeIntToUint(bytes.Count(s, []byte{'\n'})) + 1
+}
+
+// IndexByteNth returns the index of the nth occurrence of b in s, or -1 if not found / out of range.
+func IndexByteNth(s string, b byte, n uint) (i int) {
+	for ; n > 0; n-- {
+		if d := strings.IndexByte(s[i:], b); d == -1 {
+			return -1
+		} else {
+			i += d + 1
+		}
+	}
+
+	return i - 1
+}
+
+// Line returns the contents of the line at lineNum (1-indexed) in a most efficient way.
+func Line(s string, lineNum uint) (line string, ok bool) {
+	if lineNum == 0 {
+		return "", false
+	}
+
+	if lineNum == 1 {
+		if before, _, ok0 := strings.Cut(s, "\n"); ok0 {
+			return before, true
+		}
+
+		return s, true
+	}
+
+	idx := IndexByteNth(s, '\n', lineNum-1)
+	if idx == -1 {
+		return "", false
+	}
+
+	endIdx := strings.IndexByte(s[idx+1:], '\n')
+	if endIdx == -1 {
+		return s[idx+1:], true
+	}
+
+	return s[idx+1 : idx+1+endIdx], true
 }

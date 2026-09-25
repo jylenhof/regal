@@ -26,6 +26,10 @@
           },
           "type": "array"
         },
+        "aggregates_internal": {
+          "type": "object",
+          "description": "Internal mapping of rule -> aggregate entries (optional, used when provided)"
+        },
         "regal": {
           "$ref": "#/$defs/regal"
         }
@@ -123,33 +127,7 @@
           "$ref": "#/$defs/body"
         },
         "else": {
-          "description": "should reference #/$defs/rule. temporary workaround for https://github.com/open-policy-agent/opa/issues/6099",
-          "$ref": "#/$defs/else"
-        },
-        "location": {
-          "$ref": "#/$defs/location"
-        }
-      },
-      "additionalProperties": false,
-      "type": "object",
-      "required": [
-        "head"
-      ]
-    },
-    "else": {
-      "properties": {
-        "default": {
-          "type": "boolean"
-        },
-        "head": {
-          "$ref": "#/$defs/head"
-        },
-        "body": {
-          "$ref": "#/$defs/body"
-        },
-        "else": {
-          "description": "temporary workaround for https://github.com/open-policy-agent/opa/issues/6099",
-          "type": "object"
+          "$ref": "#/$defs/rule"
         },
         "location": {
           "$ref": "#/$defs/location"
@@ -189,21 +167,7 @@
       "type": "array"
     },
     "comment": {
-      "properties": {
-        "text": {
-          "type": "string",
-          "contentEncoding": "base64"
-        },
-        "location": {
-          "$ref": "#/$defs/location"
-        }
-      },
-      "additionalProperties": false,
-      "type": "object",
-      "required": [
-        "text",
-        "location"
-      ]
+      "$ref": "#/$defs/location"
     },
     "expr": {
       "properties": {
@@ -377,6 +341,9 @@
             },
             "rego_version": {
               "type": "string"
+            },
+            "root": {
+              "type": "string"
             }
           },
           "type": "object"
@@ -401,12 +368,6 @@
               "type": "string"
             },
             "workspace_root": {
-              "type": "string"
-            },
-            "input_dot_json": {
-              "type": "object"
-            },
-            "input_dot_json_path": {
               "type": "string"
             },
             "rego_version": {

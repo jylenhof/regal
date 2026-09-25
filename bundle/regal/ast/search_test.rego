@@ -76,36 +76,66 @@ test_find_vars_in_local_scope_complex_comprehension_term if {
 }
 
 test_found_refs_in_template_strings if {
-	refs := ast.found.refs["0"] with input as ast.policy(`r := $"{input.foo + input.bar} {data.baz}"`)
+	refs := ast.found.refs[0] with input as ast.policy(`r := $"{input.foo + input.bar} {data.baz}"`)
 
 	count(refs) == 4
 }
 
 test_found_calls_in_template_strings if {
-	calls := ast.found.calls["0"] with input as ast.policy("r := $`{count(split(input.ref, \".\"))}`")
+	calls := ast.found.calls[0] with input as ast.policy("r := $`{count(split(input.ref, \".\"))}`")
 
 	count(calls) == 2
 }
 
 test_found_expressions_in_template_strings if {
-	exprs := ast.found.expressions["0"] with input as ast.policy(`r if $"{x > 10}" == "true"`)
+	exprs := ast.found.expressions[0] with input as ast.policy(`r if $"{x > 10}" == "true"`)
 
 	count(exprs) == 2
 	count([1 | exprs[_].interpolated]) == 1
 }
 
 test_found_comprehensions_in_template_strings if {
-	comps := ast.found.comprehensions["0"] with input as ast.policy(`r := $"{[x | some x in input.arr]}"`)
+	comps := ast.found.comprehensions[0] with input as ast.policy(`r := $"{[x | some x in input.arr]}"`)
 
 	count(comps) == 1
 }
 
 test_found_symbols_in_template_strings if {
-	syms := ast.found.symbols["0"] with input as ast.policy(`r := $"{[{x, y} |
+	syms := ast.found.symbols[0] with input as ast.policy(`r := $"{[{x, y} |
 		some x
 		some y in input.arr
 		data.foo[a][b] == x + y
 	]}"`)
 
 	count(syms) == 2
+}
+
+test_found_expressions_in_logical_operands if {
+	exprs := ast.found.expressions[0] with input as ast.policy(`import future.keywords.or
+
+	r if {
+		input.a == 1 or input.b == 2
+	}`)
+
+	# the `or` expression itself, plus one expression for each of its operands
+	count(exprs) == 3
+}
+
+test_logical_operand_locations if {
+	locations := ast.logical_operand_locations[0] with input as ast.policy(`import future.keywords.and
+	import future.keywords.or
+
+	r if {
+		input.a or {
+			x := input.b
+			x == 1
+		} and input.c
+	}`)
+
+	# the `or` operands (`input.a` and the whole `and` expression) and the `and` rhs, but not the braced lhs
+	locations == {"7:3:7:10", "7:14:10:16", "10:9:10:16"}
+}
+
+test_logical_operand_locations_none_found if {
+	ast.logical_operand_locations == {} with input as ast.policy(`r if input.a == 1`)
 }

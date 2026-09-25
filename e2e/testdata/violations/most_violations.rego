@@ -84,6 +84,8 @@ inconsistent_args(b, a) if {
 	b == a
 }
 
+invalid_regexp if regex.match(`(((((`, "text")
+
 if_empty_object if {}
 
 redundant_existence_check if {
@@ -175,6 +177,8 @@ use_array_flatten if array.concat([1], array.concat([2], [3]))
 
 use_object_union_n if object.union(a, object.union(b, c))
 
+prefer_string_interpolation if sprintf("%s", [abs])
+
 ### Style ###
 
 # avoid-get-and-list-prefix
@@ -209,6 +213,8 @@ x := y if {
 }
 
 use_assignment = "oparator"
+
+superfluous_object_get if object.get(input, ["path", "to", "value"], "default") == "expected"
 
 rule_length if {
 	input.x1
@@ -330,3 +336,12 @@ non_loop_expression if {
 	endswith(user.email, "example.com")
 	role == "admin"
 }
+
+repeated_computation if {
+	count(input.items) > 0
+	count(input.items) > 1
+}
+
+unconditional_with_conditions := true if input.conditional
+
+unconditional_with_conditions := false

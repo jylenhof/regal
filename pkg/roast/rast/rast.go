@@ -3,6 +3,7 @@ package rast
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"iter"
 	"os"
@@ -83,7 +84,7 @@ func ArrayTerm(a []string) *ast.Term {
 		return ast.InternedEmptyArray
 	}
 
-	return ast.ArrayTerm(util.Map(a, ast.InternedTerm)...)
+	return ast.ArrayTerm(outil.Map(a, ast.InternedTerm)...)
 }
 
 func AppendLocation(buf []byte, location *ast.Location) []byte {
@@ -109,11 +110,11 @@ func AppendLocation(buf []byte, location *ast.Location) []byte {
 		buf = slices.Grow(buf, n)
 	}
 
-	buf = append(strconv.AppendInt(buf, int64(location.Row), 10), ':')
-	buf = append(strconv.AppendInt(buf, int64(location.Col), 10), ':')
-	buf = append(strconv.AppendInt(buf, int64(endRow), 10), ':')
+	buf = append(outil.AppendInt(buf, location.Row), ':')
+	buf = append(outil.AppendInt(buf, location.Col), ':')
+	buf = append(outil.AppendInt(buf, endRow), ':')
 
-	return strconv.AppendInt(buf, int64(endCol), 10)
+	return outil.AppendInt(buf, endCol)
 }
 
 func refHeadTerm(name string) *ast.Term {
@@ -130,6 +131,11 @@ func refHeadTerm(name string) *ast.Term {
 // Item is a helper function to create an ast.Item with an interned key.
 func Item(key string, value *ast.Term) [2]*ast.Term {
 	return ast.Item(ast.InternedTerm(key), value)
+}
+
+// Insert works like ast.Object.Insert but with an interned string key.
+func Insert(obj ast.Object, key string, value *ast.Term) {
+	obj.Insert(ast.InternedTerm(key), value)
 }
 
 // GetValue works like ast.Object.Get but with type assertion for the return value,
@@ -216,10 +222,23 @@ func StructToValue(input any) ast.Value {
 		}
 
 		iface := value.Interface()
-		if vi, ok := iface.(*ast.Term); ok {
-			kvs = append(kvs, ast.Item(ast.InternedTerm(tag), vi))
-		} else {
-			kvs = append(kvs, ast.Item(ast.InternedTerm(tag), ast.NewTerm(toAstValue(iface))))
+
+		val := toAstValue(iface)
+		switch v := val.(type) {
+		case ast.Null:
+			kvs = append(kvs, Item(tag, ast.InternedNullTerm))
+		case ast.Boolean:
+			kvs = append(kvs, Item(tag, ast.InternedTerm(bool(v))))
+		case ast.String:
+			kvs = append(kvs, Item(tag, ast.InternedTerm(string(v))))
+		case ast.Number:
+			if i, ok := v.Int64(); ok {
+				kvs = append(kvs, Item(tag, ast.InternedTerm(int(i))))
+			} else {
+				kvs = append(kvs, Item(tag, ast.NewTerm(val)))
+			}
+		default:
+			kvs = append(kvs, Item(tag, ast.NewTerm(val)))
 		}
 	}
 
@@ -242,6 +261,15 @@ func toAstValue(v any) ast.Value {
 		}
 
 		rv = rv.Elem()
+	}
+
+	if rm, ok := v.(*json.RawMessage); ok {
+		var decoded any
+		if err := json.Unmarshal(*rm, &decoded); err != nil {
+			return ast.NullValue
+		}
+
+		return toAstValue(decoded)
 	}
 
 	//nolint:exhaustive

@@ -1,12 +1,13 @@
 package module
 
 import (
+	"bytes"
 	"strconv"
 	"testing"
 
 	"github.com/open-policy-agent/opa/v1/ast"
 
-	"github.com/open-policy-agent/regal/internal/roast/transforms"
+	"github.com/open-policy-agent/regal/internal/test/must"
 	"github.com/open-policy-agent/regal/pkg/roast/encoding"
 )
 
@@ -44,23 +45,10 @@ arrcomp := [x | some x in input]
 objcomp := {x: y | some x, y in input}
 setcomp := {x | some x in input}
 `
-	module := ast.MustParseModuleWithOpts(policy, ast.ParserOptions{
-		ProcessAnnotation: true,
-	})
-
-	value, err := ToValue(module)
-	if err != nil {
-		t.Fatalf("failed to convert module to value: %v", err)
-	}
-
-	roundTripped, err := roundTripToValue(module)
-	if err != nil {
-		t.Fatalf("failed to round trip module: %v", err)
-	}
-
-	if value.Compare(roundTripped) != 0 {
-		t.Errorf("expected value to equal round-tripped value, got: %v\n\n, want: %v", value, roundTripped)
-	}
+	module := ast.MustParseModuleWithOpts(policy, ast.ParserOptions{ProcessAnnotation: true})
+	value := must.Return(ToValue(module))(t)
+	buf := new(bytes.Buffer)
+	must.Equal(t, nil, encoding.OfValue().Encode(buf, value))
 }
 
 func TestModuleToValueTemplateString(t *testing.T) {
@@ -103,12 +91,116 @@ func TestModuleToValueTemplateString(t *testing.T) {
 			t.Fatalf("expected 3 parts in template string, got: %d", partsArr.Len())
 		}
 	} else {
-		t.Fatalf("expected parts key in template string value")
+		t.Fatal("expected parts key in template string value")
 	}
 }
 
+func TestModuleToValueNotImport(t *testing.T) {
+	t.Parallel()
+
+	module := ast.MustParseModule(`package test
+		import future.keywords.not
+
+		p if {
+			not input.denied
+		}
+
+		q if {
+			not {
+				x := input.role
+				x == "banned"
+			}
+		}
+	`)
+
+	value := must.Return(ToValue(module))(t)
+	buf := new(bytes.Buffer)
+	must.Equal(t, nil, encoding.OfValue().Encode(buf, value))
+}
+
+func TestModuleToValueLogicalKeywords(t *testing.T) {
+	t.Parallel()
+
+	module := ast.MustParseModuleWithOpts(`package test
+import future.keywords.and
+import future.keywords.or
+
+p if {
+	input.a or input.b and input.c
+}
+
+q if {
+	{
+		x := input.a
+		x == 1
+	} and input.b
+}
+`, ast.ParserOptions{
+		Capabilities: ast.CapabilitiesForThisVersion(ast.CapabilitiesExperimentalKeywords(true)),
+	})
+
+	value := must.Return(ToValue(module))(t)
+
+	buf := new(bytes.Buffer)
+	must.Equal(t, nil, encoding.OfValue().Encode(buf, value))
+
+	// `and` binds tighter than `or`, so the first rule is `a or (b and c)`
+	or := firstExprTerms(t, value, 0)
+
+	must.Equal(t, "or", stringAttr(t, or, "type"))
+	must.Equal(t, 1, bodyAttr(t, or, "lhs").Len())
+	must.Equal(t, 1, bodyAttr(t, or, "rhs").Len())
+
+	and := attr(t, bodyAttr(t, or, "rhs").Elem(0).Value, "terms")
+
+	must.Equal(t, "and", stringAttr(t, and, "type"))
+	must.Equal(t, 1, bodyAttr(t, and, "lhs").Len())
+	must.Equal(t, 1, bodyAttr(t, and, "rhs").Len())
+
+	// the second rule has a brace enclosed lhs, holding two expressions
+	explicit := firstExprTerms(t, value, 1)
+
+	must.Equal(t, "and", stringAttr(t, explicit, "type"))
+	must.Equal(t, ast.Boolean(true), must.Be[ast.Boolean](t, attr(t, explicit, "explicit_lhs")))
+	must.Equal(t, 2, bodyAttr(t, explicit, "lhs").Len())
+	must.Equal(t, 1, bodyAttr(t, explicit, "rhs").Len())
+}
+
+// firstExprTerms returns the "terms" attribute of the first expression in the
+// body of the rule at index i.
+func firstExprTerms(t *testing.T, value ast.Value, i int) ast.Value {
+	t.Helper()
+
+	terms := must.Return(value.Find(ast.Ref{
+		ast.InternedTerm("rules"),
+		ast.InternedTerm(i),
+		ast.InternedTerm("body"),
+		ast.InternedTerm(0),
+		ast.InternedTerm("terms"),
+	}))(t)
+
+	return terms
+}
+
+func attr(t *testing.T, value ast.Value, key string) ast.Value {
+	t.Helper()
+
+	return must.Be[ast.Object](t, value).Get(ast.InternedTerm(key)).Value
+}
+
+func stringAttr(t *testing.T, value ast.Value, key string) string {
+	t.Helper()
+
+	return string(must.Be[ast.String](t, attr(t, value, key)))
+}
+
+func bodyAttr(t *testing.T, value ast.Value, key string) *ast.Array {
+	t.Helper()
+
+	return must.Be[*ast.Array](t, attr(t, value, key))
+}
+
 // BenchmarkModuleToValue/ToValue-16         	  27673	         40987 ns/op	   64705 B/op	    1740 allocs/op
-// BenchmarkModuleToValue/RoundTrip-16       	   10000	    119018 ns/op	  166038 B/op	    3924 allocs/op
 func BenchmarkModuleToValue(b *testing.B) {
 	policy := `# METADATA
 # title: p p p
@@ -159,26 +251,9 @@ setcomp := {x | some x in input}
 		}
 	})
 
-	b.Run("RoundTrip", func(b *testing.B) {
-		for b.Loop() {
-			value2, err = roundTripToValue(module)
-			if err != nil {
-				b.Fatalf("failed to round trip module: %v", err)
-			}
-		}
-	})
-
 	if value1.Compare(value2) != 0 {
 		b.Errorf("expected value to equal round-tripped value, got: %v\n\n, want: %v", value1, value2)
 	}
-}
-
-func roundTripToValue(module *ast.Module) (ast.Value, error) {
-	var obj map[string]any
-
-	encoding.MustJSONRoundTrip(module, &obj)
-
-	return transforms.AnyToValue(obj)
 }
 
 // Tangentially related benchmark to find out the cost of repeatedly inserting items into an object

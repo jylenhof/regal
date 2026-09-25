@@ -11,18 +11,21 @@ test_fail_can_use_strings_count if {
 
 	r == {{
 		"category": "idiomatic",
-		"description": "Use `strings.count` where possible",
+		"description": "Use `strings.count`",
 		"level": "error",
 		"location": {
 			"col": 6,
 			"file": "policy.rego",
 			"row": 5,
 			"text": `x := count(indexof_n("foo", "o"))`,
-			"end": {"col": 33, "row": 5},
+			"end": {
+				"col": 33,
+				"row": 5,
+			},
 		},
 		"related_resources": [{
 			"description": "documentation",
-			"ref": config.docs.resolve_url("$baseUrl/$category/use-strings-count", "idiomatic"),
+			"ref": "https://www.openpolicyagent.org/projects/regal/rules/idiomatic/use-strings-count",
 		}],
 		"title": "use-strings-count",
 	}}

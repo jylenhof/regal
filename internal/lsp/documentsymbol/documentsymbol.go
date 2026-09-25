@@ -1,7 +1,6 @@
 package documentsymbol
 
 import (
-	"bytes"
 	"fmt"
 	"strings"
 
@@ -17,11 +16,12 @@ func All(contents string, module *ast.Module, builtins map[string]*ast.Builtin) 
 	// TODO: Rewrite in Rego.
 	// Only pkgSymbols would likely suffice, but we're keeping docSymbols around in case
 	// we ever want to add more top-level symbols than the package.
-	docSymbols := make([]types.DocumentSymbol, 0)
+	docSymbols := make([]types.DocumentSymbol, 0, 1)
 	pkgSymbols := make([]types.DocumentSymbol, 0)
 
-	lines := strings.Split(contents, "\n")
-	pkgRange := types.RangeBetween(0, 0, len(lines)-1, len(lines[len(lines)-1]))
+	lines := util.NumLines(contents)
+	lastLine, _ := util.Line(contents, lines)
+	pkgRange := types.RangeBetween(0, 0, lines-1, len(lastLine))
 	pkg := documentSymbol(module.Package.Path.String(), symbols.Package, pkgRange)
 
 	// Create groups of rules and functions sharing the same name
@@ -93,11 +93,11 @@ func All(contents string, module *ast.Module, builtins map[string]*ast.Builtin) 
 
 func locationToRange(location *ast.Location) types.Range {
 	startLine := util.SafeIntToUint(location.Row - 1)
-	numLines := bytes.Count(location.Text, []byte{'\n'}) + 1
+	numLines := util.BytesNumLines(location.Text)
 
 	endLine := startLine
 	if numLines > 1 {
-		endLine += util.SafeIntToUint(numLines - 1)
+		endLine += numLines - 1
 	}
 
 	endLineContent := util.LineContents(location.Text, endLine-startLine)

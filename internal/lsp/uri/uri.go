@@ -28,34 +28,35 @@ func FromPath(client clients.Identifier, path string) string {
 		path = strings.TrimPrefix(path, driveLetter)
 	}
 
-	parts := strings.Split(filepath.ToSlash(path), uriSeparator)
-	for i, part := range parts {
-		parts[i] = strings.ReplaceAll(url.QueryEscape(part), "+", "%20")
-	}
-
-	if client == clients.IdentifierVSCode && driveLetter != "" {
-		driveLetter = url.QueryEscape(driveLetter)
-	}
-
-	joinedParts := strings.Join(parts, uriSeparator)
-
-	// Handle Unix paths that start with / and have no drive letter
-	if driveLetter == "" && strings.HasPrefix(joinedParts, uriSeparator) {
-		return "file://" + joinedParts
-	}
+	var sb strings.Builder
+	sb.Grow(len(path) + len(driveLetter) + 8) // "file:///" + drive letter + path
+	sb.WriteString("file:///")
 
 	// Handle Windows paths with drive letters
 	if driveLetter != "" {
-		return "file:///" + driveLetter + joinedParts
+		if client == clients.IdentifierVSCode {
+			driveLetter = url.QueryEscape(driveLetter)
+		}
+
+		sb.WriteString(driveLetter)
+	}
+
+	part, remaining, found := strings.Cut(filepath.ToSlash(path), uriSeparator)
+
+	sb.WriteString(strings.ReplaceAll(url.QueryEscape(part), "+", "%20"))
+
+	for found {
+		part, remaining, found = strings.Cut(remaining, uriSeparator)
+
+		sb.WriteString(uriSeparator)
+		sb.WriteString(strings.ReplaceAll(url.QueryEscape(part), "+", "%20"))
 	}
 
 	// Handle other cases (no drive letter, no leading slash)
-	return "file:///" + joinedParts
+	return sb.String()
 }
 
-// ToPath converts a URI to a file path from a format for a given client.
-// Some clients represent URIs differently, and so this function exists to convert
-// client URIs into a standard file paths.
+// ToPath converts a URI to a file path.
 func ToPath(uri string) string {
 	// if it looks like uri was a file URI, then there might be encoded characters in the path
 	path, hadPrefix := strings.CutPrefix(uri, "file://")

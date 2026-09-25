@@ -2,21 +2,20 @@ package test
 
 import (
 	"context"
-	"fmt"
-	"slices"
 	"testing"
 
 	"github.com/sourcegraph/jsonrpc2"
 
 	"github.com/open-policy-agent/regal/internal/lsp/connection"
 	"github.com/open-policy-agent/regal/internal/lsp/handler"
-	"github.com/open-policy-agent/regal/internal/lsp/types"
+	"github.com/open-policy-agent/regal/internal/lsp/log"
 )
 
 func HandlerFor[T any](method string, h handler.Func[T]) connection.HandlerFunc {
 	return func(_ context.Context, _ *jsonrpc2.Conn, req *jsonrpc2.Request) (any, error) {
 		if req.Method != method {
-			return nil, fmt.Errorf("unexpected method: %s for handler of: %s", req.Method, method)
+			// Silently ignore messages from other server workers that are unrelated to this test
+			return struct{}{}, nil
 		}
 
 		return handler.WithParams(req, h)
@@ -31,20 +30,8 @@ func SendsToChannel[T any](c chan T) func(T) (any, error) {
 	}
 }
 
-func Labels(completions []types.CompletionItem) []string {
-	labels := make([]string, len(completions))
-	for i, c := range completions {
-		labels[i] = c.Label
-	}
+func DebugLogger(tb testing.TB) *log.Logger {
+	tb.Helper()
 
-	return labels
-}
-
-func AssertLabels(t *testing.T, result []types.CompletionItem, expected []string) {
-	t.Helper()
-
-	labels := Labels(result)
-	if !slices.Equal(expected, labels) {
-		t.Fatalf("expected %v, got %v", expected, labels)
-	}
+	return log.NewLogger(log.LevelDebug, tb.Output())
 }

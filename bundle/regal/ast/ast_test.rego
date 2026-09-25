@@ -38,14 +38,14 @@ allow := true
 
 	blocks == [
 		[
-			{"location": {"col": 1, "end": {"col": 15, "row": 5}, "row": 3, "text": "# METADATA"}, "text": " METADATA"},
-			{"location": {"col": 1, "end": {"col": 13, "row": 4}, "row": 4, "text": "# title: foo"}, "text": " title: foo"},
-			{"location": {"col": 1, "end": {"col": 15, "row": 5}, "row": 5, "text": "# bar: invalid"}, "text": " bar: invalid"},
+			{"col": 1, "end": {"col": 15, "row": 5}, "row": 3, "text": "# METADATA"},
+			{"col": 1, "end": {"col": 13, "row": 4}, "row": 4, "text": "# title: foo"},
+			{"col": 1, "end": {"col": 15, "row": 5}, "row": 5, "text": "# bar: invalid"},
 		],
-		[{"location": {"col": 1, "end": {"col": 15, "row": 8}, "row": 8, "text": "# not metadata"}, "text": " not metadata"}],
+		[{"col": 1, "end": {"col": 15, "row": 8}, "row": 8, "text": "# not metadata"}],
 		[
-			{"location": {"col": 1, "end": {"col": 10, "row": 10}, "row": 10, "text": "# another"}, "text": " another"},
-			{"location": {"col": 1, "end": {"col": 8, "row": 11}, "row": 11, "text": "# block"}, "text": " block"},
+			{"col": 1, "end": {"col": 10, "row": 10}, "row": 10, "text": "# another"},
+			{"col": 1, "end": {"col": 8, "row": 11}, "row": 11, "text": "# block"},
 		],
 	]
 }
@@ -74,7 +74,8 @@ test_find_names_in_scope if {
 	module := regal.parse_module("p.rego", policy)
 	allow_rule := module.rules[3]
 
-	in_scope := ast.find_names_in_scope(allow_rule, {"col": 1, "row": 30}) with input as module
+	in_scope := ast.find_names_in_scope(allow_rule, {"col": 1, "row": 30})
+		with input as module
 		with config.capabilities as capabilities.provided
 
 	in_scope == {"bar", "global", "comp", "allow", "a", "b", "c", "d", "e"}
@@ -85,7 +86,7 @@ var_names(vars) := {var.value | some var in vars}
 test_provided_capabilities_never_undefined if capabilities.provided == {} with data.internal as {}
 
 test_function_calls if {
-	calls := ast.function_calls["0"] with input as ast.with_rego_v1(`
+	calls := ast.function_calls[0] with input as ast.with_rego_v1(`
 	rule if {
 		x := 1
 		f(2)
@@ -297,7 +298,9 @@ test_var_in_head_templatestring[case] if {
 
 test_builtin_functions_called_in_templatestring if {
 	module := ast.policy(`r := $"{upper("a")} {lower("b")}"`)
-	names := ast.builtin_functions_called with input as module with config.capabilities as capabilities.provided
+	names := ast.builtin_functions_called
+		with input as module
+		with config.capabilities as capabilities.provided
 
 	names == {"upper", "lower"}
 }

@@ -5,6 +5,7 @@
 **Category**: Bugs
 
 **Avoid**
+
 ```rego
 package policy
 
@@ -17,6 +18,7 @@ allow if {
 ```
 
 **Prefer**
+
 ```rego
 package policy
 
@@ -71,12 +73,16 @@ If you want to have empty collections fail on `every` conditions, do make sure t
 
 ## Configuration Options
 
-This linter rule provides the following configuration options:
+This linter rule provides the following [configuration options](https://www.openpolicyagent.org/projects/regal/configuration):
 
-```yaml
+```yaml title=".regal/config.yaml or .regal.yaml"
 rules:
   bugs:
     redundant-loop-count:
       # one of "error", "warning", "ignore"
       level: error
 ```
+
+## Related Resources
+
+- GitHub: [Source Code](https://github.com/open-policy-agent/regal/blob/main/bundle/regal/rules/bugs/redundant-loop-count/redundant_loop_count.rego)

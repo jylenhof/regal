@@ -11,8 +11,6 @@ import (
 	"strings"
 	"sync"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/open-policy-agent/opa/v1/ast"
 	"github.com/open-policy-agent/opa/v1/bundle"
 	ofilter "github.com/open-policy-agent/opa/v1/loader/filter"
@@ -176,55 +174,6 @@ func WithCreateRecursive(path string, fn func(f *os.File) error) error {
 	return fn(file)
 }
 
-// FindInputPath consults the filesystem and returns the location of the input.json
-// or input.yaml closest to the file provided.
-func FindInputPath(file, workspacePath string) string {
-	relative := strings.TrimPrefix(file, workspacePath)
-	components := strings.Split(filepath.Dir(relative), string(os.PathSeparator))
-	supported := []string{"input.json", "input.yaml"}
-
-	for i := range components {
-		current := components[:len(components)-i]
-
-		prefix := filepath.Join(append([]string{workspacePath}, current...)...)
-		for _, name := range supported {
-			inputPath := filepath.Join(prefix, name)
-			if _, err := os.Stat(inputPath); err == nil {
-				return inputPath
-			}
-		}
-	}
-
-	return ""
-}
-
-// FindInput finds input.json or input.yaml file in workspace closest to the file, and returns
-// both the location and the contents of the file (as map), or an empty string and nil if not found.
-// Note that:
-// - This function doesn't do error handling. If the file can't be read, nothing is returned.
-// - While the input data theoretically could be anything JSON/YAML value, we only support an object.
-func FindInput(file, workspacePath string) (inputPath string, input map[string]any) {
-	inputPath = FindInputPath(file, workspacePath)
-	if content, err := os.ReadFile(inputPath); err == nil {
-		if err = unmarshallerFor(filepath.Base(inputPath))(content, &input); err == nil {
-			return inputPath, input
-		}
-	}
-
-	return "", nil
-}
-
-func unmarshallerFor(name string) func([]byte, any) error {
-	switch name {
-	case "input.json":
-		return encoding.JSON().Unmarshal
-	case "input.yaml", "input.yml":
-		return yaml.Unmarshal
-	}
-
-	panic("no decoder for file type: " + name)
-}
-
 // FindManifestLocations walks the file system rooted at root, and returns the
 // *relative* paths of directories containing a .manifest file.
 func FindManifestLocations(root string) ([]string, error) {
@@ -336,7 +285,7 @@ func DirCleanUpPaths(target string, preserve []string) ([]string, error) {
 // An interestng side-effect of pushing our builtins into ast.RegisterBuiltin is that
 // they end up in "OPA's" list of builtins. Hence why we reverse that here.
 func capabilities() *ast.Capabilities {
-	cpy := *ast.CapabilitiesForThisVersion()
+	cpy := *ast.CapabilitiesForThisVersion(ast.CapabilitiesExperimentalKeywords(true))
 
 	return &cpy
 }

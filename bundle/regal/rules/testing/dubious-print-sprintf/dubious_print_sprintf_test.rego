@@ -10,7 +10,9 @@ test_fail_print_sprintf if {
 	module := ast.policy(`y if {
 		print(sprintf("name is: %s domain is: %s", [input.name, input.domain]))
 	}`)
-	r := rule.report with input as module with config.capabilities as capabilities.provided
+	r := rule.report
+		with input as module
+		with config.capabilities as capabilities.provided
 
 	r == {{
 		"category": "testing",
@@ -28,7 +30,7 @@ test_fail_print_sprintf if {
 		},
 		"related_resources": [{
 			"description": "documentation",
-			"ref": config.docs.resolve_url("$baseUrl/$category/dubious-print-sprintf", "testing"),
+			"ref": "https://www.openpolicyagent.org/projects/regal/rules/testing/dubious-print-sprintf",
 		}],
 		"title": "dubious-print-sprintf",
 	}}
@@ -41,7 +43,9 @@ test_fail_bodies_print_sprintf if {
 			print(sprintf("x is: %s", [x]))
 		]
 	}`)
-	r := rule.report with input as module with config.capabilities as capabilities.provided
+	r := rule.report
+		with input as module
+		with config.capabilities as capabilities.provided
 
 	r == {{
 		"category": "testing",
@@ -59,7 +63,7 @@ test_fail_bodies_print_sprintf if {
 		},
 		"related_resources": [{
 			"description": "documentation",
-			"ref": config.docs.resolve_url("$baseUrl/$category/dubious-print-sprintf", "testing"),
+			"ref": "https://www.openpolicyagent.org/projects/regal/rules/testing/dubious-print-sprintf",
 		}],
 		"title": "dubious-print-sprintf",
 	}}

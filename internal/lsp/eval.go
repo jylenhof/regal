@@ -4,18 +4,29 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/open-policy-agent/opa/v1/ast"
 	"github.com/open-policy-agent/opa/v1/bundle"
+	"github.com/open-policy-agent/opa/v1/cover"
+	"github.com/open-policy-agent/opa/v1/dependencies"
 	"github.com/open-policy-agent/opa/v1/rego"
+	"github.com/open-policy-agent/opa/v1/topdown"
+	"github.com/open-policy-agent/opa/v1/topdown/builtins"
 	"github.com/open-policy-agent/opa/v1/topdown/print"
 
 	rbundle "github.com/open-policy-agent/regal/bundle"
+	rio "github.com/open-policy-agent/regal/internal/io"
+	rrego "github.com/open-policy-agent/regal/internal/lsp/rego"
 	rquery "github.com/open-policy-agent/regal/internal/lsp/rego/query"
+	"github.com/open-policy-agent/regal/internal/lsp/types"
 	"github.com/open-policy-agent/regal/internal/lsp/uri"
 	"github.com/open-policy-agent/regal/internal/util"
 	"github.com/open-policy-agent/regal/pkg/config"
+	"github.com/open-policy-agent/regal/pkg/roast/encoding"
 	"github.com/open-policy-agent/regal/pkg/roast/transform"
 
 	_ "github.com/open-policy-agent/regal/pkg/builtins"
@@ -28,78 +39,289 @@ var (
 		Roots:    &[]string{"workspace"}, // no data in this bundle so no roots are used, however, roots must be set
 		Metadata: map[string]any{"name": "workspace"},
 	}
+	regalEvalUseAsInputComment = regexp.MustCompile(`^\s*regal eval:\s*use-as-input`)
 )
 
-type EvalResult struct {
-	Value       any                         `json:"value"`
-	PrintOutput map[string]map[int][]string `json:"printOutput"`
-	IsUndefined bool                        `json:"isUndefined"`
+type (
+	EvalResult struct {
+		Value       any                         `json:"value"`
+		PrintOutput map[string]map[int][]string `json:"printOutput"`
+		IsUndefined bool                        `json:"isUndefined"`
+	}
+	PrintHook struct {
+		Output map[string]map[int][]string
+		// FileNameBase if set, is prepended to filenames in print output. Needed
+		// because rego files are evaluated with relative paths (so errors match
+		// OPA CLI format) but print hook output consumers need full URIs.
+		FileNameBase string
+	}
+)
+
+func (l *LanguageServer) handleEvalCommand(ctx context.Context, args types.CommandArgs) (err error) {
+	if args.Target == "" || args.Query == "" {
+		return fmt.Errorf("expected command target and query, got target %q, query %q", args.Target, args.Query)
+	}
+
+	contents, module, ok := l.cache.GetContentAndModule(args.Target)
+	if !ok {
+		return fmt.Errorf("failed to get content or module for file %q", args.Target)
+	}
+
+	var (
+		inputValue ast.Value
+		inputPath  string
+	)
+
+	packagePath := module.Package.Path.String()
+
+	// When the first comment in the file is `regal eval: use-as-input`, the AST of that module is
+	// used as the input rather than the contents of input.json/yaml. This is a development feature for
+	// working on rules (built-in or custom), allowing querying the AST of the module directly.
+
+	if len(module.Comments) > 0 && regalEvalUseAsInputComment.Match(module.Comments[0].Text) {
+		inputValue, err = transform.ToAST(l.Workspace().RelativePath(args.Target), contents, module, false)
+		if err != nil {
+			return fmt.Errorf("failed to prepare module: %w", err)
+		}
+	} else {
+		// Normal mode — try to find the input.json/yaml file in the workspace and use as input
+		// NOTE that we don't break on missing input, as some rules don't depend on that, and should
+		// still be evaluable. We may consider returning some notice to the user though.
+		inputPath = l.input.FindForPath(args.Target)
+		if inputPath == "" && !l.supressInputPrompt {
+			ruleName := strings.TrimPrefix(args.Query, packagePath+".")
+			created, err := l.handleInputSkeletonPrompt(ctx, args.Target, ruleName, args.Row)
+			// Bubbling up an error here if input.json creation fails for any reason.
+			if err != nil {
+				return err
+			}
+
+			if created {
+				return nil
+			}
+		} else if inputPath != "" {
+			inputValue = l.input.Get(ctx, inputPath)
+		}
+	}
+
+	var (
+		result EvalResult
+		report *cover.Report
+	)
+
+	// This eval sends coverage only if the server and the client both support it, and inline eval too.
+	evalWithCoverage := l.featureFlags.InlineEvaluationCoverageProvider &&
+		l.Workspace().Client().InitOptions.EnableEvalInlineCoverage &&
+		l.featureFlags.InlineEvaluationProvider &&
+		l.Workspace().Client().InitOptions.EvalCodelensDisplayInline
+
+	var inputOpts []rego.EvalOption
+	if inputValue != nil {
+		inputOpts = append(inputOpts, rego.EvalParsedInput(inputValue))
+	}
+
+	if evalWithCoverage {
+		result, report, err = l.EvalInWorkspace(ctx, args.Query, cover.New(), inputOpts...)
+	} else {
+		result, _, err = l.EvalInWorkspace(ctx, args.Query, nil, inputOpts...)
+	}
+
+	if err != nil {
+		return fmt.Errorf("failed to evaluate workspace path: %w", err)
+	}
+
+	ruleHeadLocations, err := l.getRuleHeadLocations(ctx, args, contents, module)
+	if err != nil {
+		return fmt.Errorf("failed to get rule head locations: %w", err)
+	}
+
+	target := "package"
+	if len(ruleHeadLocations) > 0 {
+		target = strings.TrimPrefix(args.Query, packagePath+".")
+	}
+
+	if l.featureFlags.InlineEvaluationProvider && l.Workspace().Client().InitOptions.EvalCodelensDisplayInline {
+		responseParams := map[string]any{
+			"result": result,
+			"line":   args.Row,
+			"target": target,
+			// only used when the target is 'package'
+			"package": strings.TrimPrefix(packagePath, "data."),
+			// only used when the target is a rule
+			"rule_head_locations": ruleHeadLocations,
+		}
+
+		if report != nil {
+			responseParams["coverage"] = report
+		}
+
+		responseResult := map[string]any{}
+
+		// Use a timeout context for RPC to ensure it completes during graceful shutdown
+		rpcCtx, rpcCancel := context.WithTimeout(context.Background(), rpcTimeout)
+
+		//nolint:contextcheck
+		if err = l.conn.Call(rpcCtx, "regal/showEvalResult", responseParams, &responseResult); err != nil {
+			l.log.Message("regal/showEvalResult failed: %v", err)
+		}
+
+		rpcCancel()
+	} else {
+		output := l.Workspace().Path("output.json")
+
+		var f *os.File
+		if f, err = os.OpenFile(output, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755); err == nil {
+			value := result.Value
+			if result.IsUndefined {
+				value = emptyStringAnyMap // undefined displays as an empty object
+			}
+
+			err = encoding.NewIndentEncoder(f, "", "  ").Encode(value)
+
+			rio.CloseIgnore(f)
+		}
+	}
+
+	return err
 }
 
-type PrintHook struct {
-	Output map[string]map[int][]string
-	// FileNameBase if set, is prepended to filenames in print output. Needed
-	// because rego files are evaluated with relative paths (so errors match
-	// OPA CLI format) but print hook output consumers need full URIs.
-	FileNameBase string
+func (l *LanguageServer) getRuleHeadLocations(
+	ctx context.Context,
+	args types.CommandArgs,
+	contents string,
+	module *ast.Module,
+) ([]*ast.Location, error) {
+	pq, err := l.queryCache.GetOrSet(ctx, l.regoStore, rquery.RuleHeadLocations)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare query %s: %w", rquery.RuleHeadLocations, err)
+	}
+
+	file := filepath.Base(uri.ToPath(args.Target))
+
+	allRuleHeadLocations, err := rrego.AllRuleHeadLocations(ctx, pq, file, contents, module)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get rule head locations: %w", err)
+	}
+
+	// if there are none, then it's a package evaluation
+	ruleHeadLocations := allRuleHeadLocations[args.Query]
+
+	return ruleHeadLocations, nil
 }
 
-func (l *LanguageServer) Eval(
-	ctx context.Context, query string, input map[string]any, printHook print.Hook,
-) (rego.ResultSet, error) {
-	regoArgs := prepareRegoArgs(ast.MustParseBody(query), l.assembleEvalBundles(), printHook, l.getLoadedConfig())
+func (l *LanguageServer) EvalInWorkspace(
+	ctx context.Context,
+	query string,
+	cov *cover.Cover,
+	opts ...rego.EvalOption,
+) (EvalResult, *cover.Report, error) {
+	resultQuery := `result := ` + query
+	hook := PrintHook{
+		Output:       make(map[string]map[int][]string),
+		FileNameBase: l.Workspace().URI(),
+	}
+
+	regoArgs := prepareRegoArgs(ast.MustParseBody(resultQuery), l.assembleBundles(), hook, l.getLoadedConfig())
 
 	// TODO: Let's try to avoid preparing on each eval, but only when the contents
 	// of the workspace modules change, and before the user requests an eval.
 	pq, err := rego.New(regoArgs...).PrepareForEval(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed preparing query %s: %w", query, err)
+		return emptyEvalResult, nil, fmt.Errorf("failed preparing query %s: %w", resultQuery, err)
 	}
 
-	if input != nil {
-		if inputValue, err := transform.ToOPAInputValue(input); err != nil {
-			return nil, fmt.Errorf("failed converting input to value: %w", err)
-		} else {
-			return pq.Eval(ctx, rego.EvalParsedInput(inputValue))
+	var (
+		resultSet rego.ResultSet
+		ndCache   builtins.NDBCache
+	)
+
+	if cov != nil {
+		ndCache = builtins.NDBCache{}
+		resultSet, err = pq.Eval(
+			ctx, append([]rego.EvalOption{rego.EvalQueryTracer(cov), rego.EvalNDBuiltinCache(ndCache)}, opts...)...,
+		)
+	} else {
+		resultSet, err = pq.Eval(ctx, opts...)
+	}
+
+	if err != nil {
+		return emptyEvalResult, nil, fmt.Errorf("failed evaluating query: %w", err)
+	}
+
+	result := EvalResult{IsUndefined: true, PrintOutput: hook.Output}
+
+	if len(resultSet) > 0 {
+		res, ok := resultSet[0].Bindings["result"]
+		if !ok {
+			return emptyEvalResult, nil, errors.New("expected result in bindings, didn't get it")
 		}
+
+		result = EvalResult{Value: res, PrintOutput: hook.Output}
 	}
 
-	return pq.Eval(ctx)
+	if cov == nil {
+		return result, nil, nil
+	}
+
+	report, err := l.coverageReport(ctx, pq, cov, ndCache, opts)
+	if err != nil {
+		l.log.Message("failed to evaluate coverage for %q, continuing without it: %v", query, err.Error())
+
+		return result, nil, nil
+	}
+
+	return result, report, nil
 }
 
-func (l *LanguageServer) EvalInWorkspace(ctx context.Context, query string, input map[string]any) (EvalResult, error) {
-	resultQuery := "result := " + query
-	hook := PrintHook{
-		Output:       make(map[string]map[int][]string),
-		FileNameBase: l.workspaceRootURI,
+// coverageReport runs the two supplementary coverage passes (index-excluded, early-exit)
+// against the already-prepared query, and merges them into cov's baseline report.
+//
+// TODO: this hardcodes the two known cover.Kind values. OPA's own tester.Runner
+// does the same (opa/v1/tester/runner.go). If OPA adds a new kind, add its
+// supplementary pass here too.
+func (l *LanguageServer) coverageReport(
+	ctx context.Context, pq rego.PreparedEvalQuery, cov *cover.Cover, ndCache builtins.NDBCache, opts []rego.EvalOption,
+) (*cover.Report, error) {
+	indexExcluded := cover.New()
+
+	if _, err := pq.Eval(ctx, append(cover.NoIndexingEvalOptions(indexExcluded, ndCache), opts...)...); err != nil {
+		return nil, fmt.Errorf("failed evaluating index-excluded coverage query: %w", err)
 	}
 
-	result, err := l.Eval(ctx, resultQuery, input, hook)
-	if err != nil {
-		return emptyEvalResult, fmt.Errorf("failed evaluating query: %w", err)
+	earlyExit := cover.New()
+
+	if _, err := pq.Eval(ctx, append(cover.NoEarlyExitEvalOptions(earlyExit, ndCache), opts...)...); err != nil {
+		return nil, fmt.Errorf("failed evaluating early-exit coverage query: %w", err)
 	}
 
-	if len(result) == 0 {
-		return EvalResult{IsUndefined: true, PrintOutput: hook.Output}, nil
+	cov.AddRun(cover.KindIndexExcluded, indexExcluded)
+	cov.AddRun(cover.KindEarlyExit, earlyExit)
+
+	modules := l.cache.GetAllModules()
+	modulesByPath := make(map[string]*ast.Module, len(modules))
+
+	for fileURI, module := range modules {
+		modulesByPath[l.Workspace().RelativePath(fileURI)] = module
 	}
 
-	res, ok := result[0].Bindings["result"]
-	if !ok {
-		return emptyEvalResult, errors.New("expected result in bindings, didn't get it")
-	}
+	report := cov.Report(modulesByPath)
 
-	return EvalResult{Value: res, PrintOutput: hook.Output}, nil
+	return &report, nil
+}
+
+func (l *LanguageServer) debugArgsAssembler(query ast.Body) []func(*rego.Rego) {
+	return prepareRegoArgs(query, l.assembleBundles(), topdown.NewPrintHook(os.Stderr), l.getLoadedConfig())
 }
 
 func prepareRegoArgs(
 	query ast.Body,
-	bundles map[string]bundle.Bundle,
+	bundles map[string]*bundle.Bundle,
 	printHook print.Hook,
 	cfg *config.Config,
 ) []func(*rego.Rego) {
 	bundleArgs := make([]func(*rego.Rego), 0, len(bundles))
-	for key, b := range bundles { //nolint:gocritic // expensive copy, but I don't think we can avoid it
-		bundleArgs = append(bundleArgs, rego.ParsedBundle(key, &b))
+	for key, b := range bundles {
+		bundleArgs = append(bundleArgs, rego.ParsedBundle(key, b))
 	}
 
 	schemaResolvers := rquery.SchemaResolvers()
@@ -146,7 +368,7 @@ func prepareRegoArgs(
 	return append(args, rego.ParsedBundle("internal", internalBundle))
 }
 
-func (l *LanguageServer) assembleEvalBundles() map[string]bundle.Bundle {
+func (l *LanguageServer) assembleBundles() map[string]*bundle.Bundle {
 	// Modules
 	modules := l.cache.GetAllModules()
 	moduleFiles := make([]bundle.ModuleFile, 0, len(modules))
@@ -163,16 +385,17 @@ func (l *LanguageServer) assembleEvalBundles() map[string]bundle.Bundle {
 		dataBundles = l.bundleCache.All()
 	}
 
-	allBundles := make(map[string]bundle.Bundle, len(dataBundles)+2)
+	allBundles := make(map[string]*bundle.Bundle, len(dataBundles)+2)
 	for k := range dataBundles {
 		if dataBundles[k].Manifest.Roots != nil {
-			allBundles[k] = dataBundles[k]
+			b := dataBundles[k]
+			allBundles[k] = &b
 		} else {
 			l.log.Message("bundle %s has no roots and will be skipped", k)
 		}
 	}
 
-	allBundles["workspace"] = bundle.Bundle{
+	allBundles["workspace"] = &bundle.Bundle{
 		Manifest: workspaceBundleManifest,
 		Modules:  moduleFiles,
 		Data:     emptyStringAnyMap, // Data is sourced from the dataBundles instead
@@ -181,7 +404,7 @@ func (l *LanguageServer) assembleEvalBundles() map[string]bundle.Bundle {
 	if hasCustomRules {
 		// If someone evaluates a custom Regal rule, provide them the Regal bundle
 		// in order to make all Regal functions available
-		allBundles["regal"] = *rbundle.Loaded()
+		allBundles["regal"] = rbundle.Loaded()
 	}
 
 	return allBundles
@@ -200,4 +423,47 @@ func (h PrintHook) Print(ctx print.Context, msg string) error {
 	h.Output[filename][ctx.Location.Row] = append(h.Output[filename][ctx.Location.Row], msg)
 
 	return nil
+}
+
+func inputSkeletonFromRule(rule *ast.Rule, compiler *ast.Compiler) map[string]any {
+	root := map[string]any{}
+
+	refs, err := dependencies.Base(compiler, rule)
+	if err != nil {
+		return root
+	}
+
+	// The logic that resolves dependencies in Base doesn't find refs in the rule head.
+	// So, passing that in individually.
+	headRefs, err := dependencies.Base(compiler, rule.Head)
+	if err != nil {
+		return root
+	}
+
+	refs = util.Filter(append(refs, headRefs...), func(ref ast.Ref) bool {
+		return ref.HasPrefix(ast.InputRootRef) && len(ref) > 1
+	})
+
+	for _, ref := range refs {
+		node := root
+
+		for _, term := range ref[1 : len(ref)-1] {
+			key := strings.Trim(term.Value.String(), `"`)
+			// If there's no object for this part of the path, create one
+			if _, ok := node[key]; !ok {
+				node[key] = map[string]any{}
+			}
+			// If the object exists, make it the starting point for the next check
+			if child, ok := node[key].(map[string]any); ok {
+				node = child
+			}
+		}
+
+		leaf := strings.Trim(ref[len(ref)-1].Value.String(), `"`)
+		if _, ok := node[leaf]; !ok {
+			node[leaf] = "changeme"
+		}
+	}
+
+	return root
 }

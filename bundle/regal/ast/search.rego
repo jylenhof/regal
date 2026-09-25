@@ -1,5 +1,7 @@
 package regal.ast
 
+import future.keywords.or
+
 import data.regal.util
 
 _find_nested_vars(obj) := [value |
@@ -25,7 +27,7 @@ _find_assign_vars(value) := [value] if {
 has_named_var(node, name) if {
 	node.type == "var"
 	node.value == name
-} else if {
+} or {
 	node.type in {"array", "object", "set", "ref", "templatestring"}
 
 	walk(node.value, [_, nested])
@@ -54,10 +56,10 @@ has_term_var(terms) if {
 	term.type == "var"
 }
 
-# converting to string until https://github.com/open-policy-agent/opa/issues/6736 is fixed
-_rule_index(rule) := rule_index_strings[i] if {
-	some i
-	rule == _rules[i]
+_rule_index(rule) := i if {
+	some i, other in _rules
+
+	rule == other
 }
 
 # hack to work around the different input models of linting vs. the lsp package.. we
@@ -95,15 +97,15 @@ found.vars[rule_index].every contains term if {
 }
 
 found.vars[rule_index].args contains term if {
-	some i, rule_index in rule_index_strings
-	some term in _rules[i].head.args
+	some rule_index
+	term := _rules[rule_index].head.args[_]
 
 	term.type == "var"
 }
 
 found.vars[rule_index].args contains node if {
-	some i, rule_index in rule_index_strings
-	some term in _rules[i].head.args
+	some rule_index
+	term := _rules[rule_index].head.args[_]
 
 	term.type == "array" # only composite type that can contain vars in args position (right?)
 
@@ -137,7 +139,7 @@ found.vars[rule_index].term contains var if {
 	fn_name := ref_static_to_string(call[0].value)
 	undeclared_start := count(all_functions[fn_name].decl.args) + 1
 
-	call[undeclared_start]
+	_ = call[undeclared_start]
 	fn_name != "print"
 
 	some var in find_term_vars(array.slice(call, undeclared_start, 100))
@@ -182,21 +184,21 @@ found.vars[rule_index].some contains term if {
 }
 
 # METADATA
-# description: all refs found in module
-found.refs[rule_index] contains value if {
-	some i, rule_index in rule_index_strings
+# description: all ref terms found in module
+found.refs[rule_index] contains term if {
+	some rule_index
 
-	walk(_rules[i], [_, value])
+	walk(_rules[rule_index], [_, term])
 
-	value.type == "ref"
+	term.type == "ref"
 }
 
 # METADATA
 # description: all calls found in module
 found.calls[rule_index] contains value if {
-	some i, rule_index in rule_index_strings
+	some rule_index
 
-	walk(_rules[i], [_, value])
+	walk(_rules[rule_index], [_, value])
 
 	value[0].type == "ref"
 }
@@ -204,9 +206,9 @@ found.calls[rule_index] contains value if {
 # METADATA
 # description: all symbols found in module
 found.symbols[rule_index] contains value.symbols if {
-	some i, rule_index in rule_index_strings
+	some rule_index
 
-	walk(_rules[i], [_, value])
+	walk(_rules[rule_index], [_, value])
 }
 
 # METADATA
@@ -221,9 +223,9 @@ found.every[rule_index] contains terms if {
 # METADATA
 # description: all comprehensions found in module
 found.comprehensions[rule_index] contains value if {
-	some i, rule_index in rule_index_strings
+	some rule_index
 
-	walk(_rules[i], [_, value])
+	walk(_rules[rule_index], [_, value])
 
 	value.type in {"arraycomprehension", "objectcomprehension", "setcomprehension"}
 }
@@ -231,12 +233,30 @@ found.comprehensions[rule_index] contains value if {
 # METADATA
 # description: set containing all expressions in input AST
 found.expressions[rule_index] contains value if {
-	some i, rule_index in rule_index_strings
+	some rule_index, rule in _rules
 	some node in ["head", "body", "else"]
 
-	walk(_rules[i][node], [_, value])
+	walk(rule[node], [_, value])
 
-	value.terms
+	_ = value.terms
+}
+
+# METADATA
+# description: |
+#   locations of the expressions that make up the entirety of an `and`/`or` operand in the
+#   rule at rule_index, i.e. those that can't be removed without leaving the enclosing
+#   expression without an operand
+logical_operand_locations[rule_index] contains expr.location if {
+	some rule_index, i
+
+	terms := found.expressions[rule_index][i].terms
+	terms.type in {"and", "or"}
+
+	some operand in [terms.lhs, terms.rhs]
+
+	count(operand) == 1
+
+	expr := operand[0]
 }
 
 # METADATA
@@ -258,8 +278,7 @@ is_in_local_scope(rule, location, value) if {
 #   assignments / unification, but it's likely good enough since other rules
 #   recommend against those
 find_vars_in_local_scope(rule, location) := [var |
-	some var
-	found.vars[_rule_index(rule)][_][var]
+	var := found.vars[_rule_index(rule)][_][_]
 
 	not startswith(var.value, "$")
 	_before_location(rule.head, var, util.to_location_object(location))

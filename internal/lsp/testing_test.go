@@ -31,7 +31,9 @@ test_bar if {
 `
 
 	files := map[string]string{
-		"foo_test.rego": testRegoContents,
+		// needed to create a root for the test files.
+		".regal/config.yaml": "",
+		"foo_test.rego":      testRegoContents,
 	}
 
 	tempDir := testutil.TempDirectoryOf(t, files)
@@ -41,22 +43,15 @@ test_bar if {
 
 	clientHandler := func(_ context.Context, _ *jsonrpc2.Conn, req *jsonrpc2.Request) (any, error) {
 		switch req.Method {
-		case "textDocument/publishDiagnostics":
-			// Ignore diagnostics for this test
-			return struct{}{}, nil
 		case "regal/testLocations":
 			return handler.WithParams(req, test.SendsToChannel(receivedMessages))
 		default:
+			// Ignore diagnostics for this test
 			return struct{}{}, nil
 		}
 	}
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	ls, connClient := createAndInitServer(t, ctx, tempDir, clientHandler)
-
-	go ls.StartTestLocationsWorker(ctx)
+	_, connClient, ctx := createAndInitServer(t, tempDir, clientHandler)
 
 	if err := connClient.Notify(ctx, "textDocument/didOpen", types.DidOpenTextDocumentParams{
 		TextDocument: types.TextDocumentItem{
@@ -86,6 +81,6 @@ test_bar if {
 		}
 
 	case <-timeout.C:
-		t.Fatalf("timed out waiting for test locations notification")
+		t.Fatal("timed out waiting for test locations notification")
 	}
 }

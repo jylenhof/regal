@@ -94,6 +94,8 @@ rules.
 	},
 
 	RunE: wrapProfiling(func(args []string) error {
+		relaxGC()
+
 		if c := opaTest(args); c != 0 {
 			return ExitError{code: c}
 		}
@@ -137,7 +139,10 @@ func opaTest(args []string) int {
 		bundles, err = tester.LoadBundles(args, filter.Apply)
 		store = inmem.NewWithOpts(inmem.OptRoundTripOnWrite(false))
 	} else {
-		modules, store, err = tester.Load(args, filter.Apply)
+		modules, store, err = tester.LoadWithParserOptions(args, filter.Apply, ast.ParserOptions{
+			RegoVersion:  ast.RegoV1,
+			Capabilities: rio.Capabilities(),
+		})
 	}
 
 	if err != nil {

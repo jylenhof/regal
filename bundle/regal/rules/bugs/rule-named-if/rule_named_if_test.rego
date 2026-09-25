@@ -2,7 +2,7 @@ package regal.rules.bugs["rule-named-if_test"]
 
 import data.regal.ast
 import data.regal.capabilities
-import data.regal.config
+
 import data.regal.rules.bugs["rule-named-if"] as rule
 
 test_fail_rule_named_if if {
@@ -27,9 +27,10 @@ test_fail_rule_named_if if {
 		},
 		"related_resources": [{
 			"description": "documentation",
-			"ref": config.docs.resolve_url("$baseUrl/$category/rule-named-if", "bugs"),
+			"ref": "https://www.openpolicyagent.org/projects/regal/rules/bugs/rule-named-if",
 		}],
 		"title": "rule-named-if",
-	}} with input.regal.file.rego_version as "v0"
+	}}
+		with input.regal.file.rego_version as "v0"
 		with capabilities.is_opa_v1 as false
 }
